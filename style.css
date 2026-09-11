@@ -137,3 +137,60 @@ input[type="text"], input[type="password"], input[type="datetime-local"], select
 
 .small-muted { font-size: 0.78rem; color: var(--muted); }
 .flex-between { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* ===== 希望調査グリッド ===== */
+.grid-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+table.pref-grid {
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+table.pref-grid th, table.pref-grid td {
+  border: 1px solid #cfd3ce;
+  padding: 4px 5px;
+  text-align: center;
+  vertical-align: middle;
+}
+table.pref-grid th.dept-col, table.pref-grid td.dept-col {
+  text-align: left;
+  white-space: normal;
+  min-width: 108px;
+  max-width: 140px;
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+}
+table.pref-grid thead th {
+  background: var(--navy);
+  color: white;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+table.pref-grid thead th.dept-col { z-index: 3; }
+table.pref-grid tbody tr.row-naika td.dept-col { background: #fff8dc; }
+table.pref-grid tbody tr.row-geka td.dept-col { background: #e3f3e2; }
+table.pref-grid tbody tr.row-naika { background: #fffdf3; }
+table.pref-grid tbody tr.row-geka { background: #f4faf3; }
+
+td.cell-slot { min-width: 54px; cursor: default; }
+td.cell-blocked { background: repeating-linear-gradient(135deg, #dcdcdc, #dcdcdc 4px, #ececec 4px, #ececec 8px); color: #999; }
+td.cell-full { background: #f6dede; color: #a33; cursor: not-allowed; }
+td.cell-col-filled { opacity: 0.35; }
+td.cell-open { cursor: pointer; }
+td.cell-open:active { background: #d7ecec; }
+td.cell-mine { outline: 3px solid var(--accent); outline-offset: -3px; background: #d9f0e8 !important; font-weight: 700; }
+td.cell-ineligible { color: #bbb; }
+
+.cell-cap { font-weight: 700; }
+.cell-names { font-size: 0.62rem; color: var(--muted); line-height: 1.2; }
+.cell-names b { color: var(--navy); }
+
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.75rem; margin: 8px 0; }
+.legend span.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }
