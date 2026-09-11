@@ -178,10 +178,10 @@ function renderLegend() {
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">
       <div class="legend">
-        <span><span class="sw" style="background:#fff8dc;border:1px solid #e0d9a0;"></span>内科系</span>
-        <span><span class="sw" style="background:#e3f3e2;border:1px solid #b9dab6;"></span>外科系</span>
+        <span><span class="sw" style="background:#fff2a8;border:1px solid #d8c463;"></span>内科系</span>
+        <span><span class="sw" style="background:#b9e6b5;border:1px solid #7fc27a;"></span>外科系</span>
         <span><span class="sw" style="background:#f6dede;"></span>満員</span>
-        <span><span class="sw" style="background:#dcdcdc;"></span>受入不可</span>
+        <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
         <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
       </div>
       <p class="small-muted">セル内は「希望者数/定員」と出席番号です。太字は確定者、通常字は希望提出中の学生です。空いているセルをタップすると、そのクール・実習先を希望として提出できます。</p>
@@ -227,9 +227,14 @@ function renderGrid(institutionType, label, slots, roundPrefs, allAssignments, s
 
 function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, filledCourses) {
   const cap = slot["cap_" + courseNumber];
+  const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
 
   if (cap <= 0) {
     return `<td class="cell-slot cell-blocked">×</td>`;
+  }
+
+  if (isKuroshio) {
+    return `<td class="cell-slot cell-blocked">対象者のみ</td>`;
   }
 
   const isMine = !!(myPref && myPref.slot_id === slot.id && myPref.course_number === courseNumber &&
