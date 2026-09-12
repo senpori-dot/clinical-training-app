@@ -87,11 +87,13 @@ async function main() {
 
   headerEl.textContent = `${student.name}（出席番号 ${student.attendance_number}）`;
 
-  const { data: round } = await sb
+  const { data: round0 } = await sb
     .from("rounds")
     .select("*")
     .eq("is_current", true)
     .maybeSingle();
+
+  const round = await window.tryRunLotteryIfDue(sb, round0);
 
   const { data: assignments } = await sb
     .from("assignments")
@@ -164,7 +166,8 @@ async function renderApp(student, round, assignments) {
 
   html += `<div class="card"><b>現在のラウンド：<span style="color:#2e7d6b;">${courseLabel}</span>（第${round.round_number}ラウンド）</b>`;
   if (round.start_at) html += `<div class="small-muted">開始: ${fmtDate(round.start_at)}</div>`;
-  if (round.end_at) html += `<div class="small-muted">終了(締切): ${fmtDate(round.end_at)}</div>`;
+  if (round.end_at) html += `<div class="small-muted">1次締切: ${fmtDate(round.end_at)}</div>`;
+  if (round.second_deadline) html += `<div class="small-muted">2次締切: ${fmtDate(round.second_deadline)}</div>`;
   if (round.reveal_at) {
     const revealed0 = now >= new Date(round.reveal_at);
     html += `<div class="small-muted">${revealed0 ? `氏名は ${fmtDate(round.reveal_at)} に公開されました` : `氏名の公開: ${fmtDate(round.reveal_at)}（それまでは人数のみ表示）`}</div>`;
@@ -176,7 +179,8 @@ async function renderApp(student, round, assignments) {
   }
 
   const notStarted = round.start_at && now < new Date(round.start_at);
-  const ended = round.end_at && now > new Date(round.end_at);
+  const firstEnded = round.end_at && now > new Date(round.end_at);
+  const secondEnded = round.second_deadline && now > new Date(round.second_deadline);
 
   let canEdit = false;
   let myPref = null;
@@ -198,8 +202,10 @@ async function renderApp(student, round, assignments) {
     let statusNotice = "";
     if (round.phase === "closed") {
       statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
-    } else if (ended) {
-      statusNotice = `<div class="notice info">受付終了時刻を過ぎました。抽選・確定処理をお待ちください。</div>`;
+    } else if (round.phase === "first_choice" && firstEnded) {
+      statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
+    } else if (round.phase === "second_match" && secondEnded) {
+      statusNotice = `<div class="notice info">2次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
     } else if (attempt === 1) {
       if (!myPref || myPref.status === "submitted") {
         canEdit = true;
@@ -283,11 +289,12 @@ function renderLegend(revealed, courseLabel) {
         <span><span class="sw" style="background:#fff2a8;border:1px solid #d8c463;"></span>内科系</span>
         <span><span class="sw" style="background:#b9e6b5;border:1px solid #7fc27a;"></span>外科系</span>
         <span><span class="sw" style="background:#f6dede;"></span>満員</span>
+        <span><span class="sw" style="background:#fceccb;border:2px solid #d99a3a;"></span>定員超過中(それでも選択可)</span>
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
         <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
         <span><span class="sw" style="background:#2e7d6b;"></span>今回選べる列（${courseLabel}）</span>
       </div>
-      <p class="small-muted">施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。①〜⑥すべての列を表示していますが、選択・変更できるのは緑色に強調された「今回のターム」の列だけです。${revealed
+      <p class="small-muted">施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。①〜⑥すべての列を表示していますが、選択・変更できるのは緑色に強調された「今回のターム」の列だけです。定員を超えていても締切までは希望を出せます。締切を過ぎると自動的に抽選が行われ、抽選に外れた場合は2次マッチングに進みます。${revealed
         ? "氏名は公開されています。"
         : "現在は匿名期間中のため、今回のタームについては他の人の希望が「人数」のみ表示されます（あなた自身の希望は常に分かります）。"}</p>
     </div>
@@ -374,10 +381,10 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
     (myPref.status === "submitted" || myPref.status === "lottery"));
   const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.status !== "confirmed");
   const totalCount = confirmedHere.length + pendingHere.length;
-  const isFull = totalCount >= cap && !isMine;
+  const overCapacity = totalCount >= cap; // 定員オーバーでも選択自体は可能（期限後に抽選で調整）
 
   const facilityLimit = limitMap[slot.facility_name];
-  const facilityFull = facilityLimit && facilityCountActive[slot.facility_name] >= facilityLimit.max_total && !isMine;
+  const facilityOver = facilityLimit && facilityCountActive[slot.facility_name] >= facilityLimit.max_total;
 
   let namesHtml = "";
   if (revealed) {
@@ -393,7 +400,8 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
     namesHtml = parts.join(" + ");
   }
 
-  let eligible = canEdit && !isFull && !facilityFull && (
+  // 定員オーバーでも「期限までは」提出可能。締切後は自動抽選で調整されるため、ここではブロックしない。
+  let eligible = canEdit && (
     (slot.institution_type === "internal" && remaining.internal > 0) ||
     (slot.institution_type === "external" && remaining.external > 0)
   ) && (
@@ -410,7 +418,7 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
 
   let cls = "cell-slot" + activeClass;
   if (isMine) cls += " cell-mine";
-  else if (isFull || facilityFull) cls += " cell-full";
+  else if ((overCapacity || facilityOver) && eligible) cls += " cell-open cell-overbook";
   else if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
@@ -418,12 +426,12 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
     ? `data-slot="${slot.id}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}"`
     : "";
 
-  const facilityFullNote = facilityFull && !isFull ? `<div class="cell-names">施設全体で満員</div>` : "";
+  const overNote = (overCapacity || facilityOver) ? `<div class="cell-names" style="color:#b3413a;">定員超過中</div>` : "";
 
   return `<td class="${cls}" ${dataAttrs}>
     <div class="cell-cap">${totalCount}/${cap}</div>
     ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
-    ${facilityFullNote}
+    ${overNote}
   </td>`;
 }
 

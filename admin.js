@@ -109,7 +109,8 @@ async function renderRoundsTab() {
       <td>${r.phase}</td>
       <td class="small-muted">
         開始:${r.start_at ? new Date(r.start_at).toLocaleString("ja-JP") : "-"}<br/>
-        終了:${r.end_at ? new Date(r.end_at).toLocaleString("ja-JP") : "-"}<br/>
+        1次締切:${r.end_at ? new Date(r.end_at).toLocaleString("ja-JP") : "-"}<br/>
+        2次締切:${r.second_deadline ? new Date(r.second_deadline).toLocaleString("ja-JP") : "-"}<br/>
         公開:${r.reveal_at ? new Date(r.reveal_at).toLocaleString("ja-JP") : "最初から公開"}
       </td>
       <td>${r.is_current ? "★現在" : ""}</td>
@@ -142,8 +143,12 @@ async function renderRoundsTab() {
         <input type="datetime-local" id="new-start" />
       </div>
       <div style="margin:10px 0;">
-        <label class="small-muted">終了日時（締切）</label>
+        <label class="small-muted">1次締切日時（この日時を過ぎると自動で抽選されます）</label>
         <input type="datetime-local" id="new-end" />
+      </div>
+      <div style="margin:10px 0;">
+        <label class="small-muted">2次マッチング締切日時（1次抽選で外れた人の再提出締切。この日時を過ぎると自動で2次抽選されます）</label>
+        <input type="datetime-local" id="new-second-deadline" />
       </div>
       <div style="margin:10px 0;">
         <label class="small-muted">氏名の公開日時（ブラインド解除）</label>
@@ -166,6 +171,7 @@ async function renderRoundsTab() {
     const courseNumber = Number(document.getElementById("new-course").value);
     const startVal = document.getElementById("new-start").value;
     const endVal = document.getElementById("new-end").value;
+    const secondDeadlineVal = document.getElementById("new-second-deadline").value;
     const revealVal = document.getElementById("new-reveal").value;
     await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
     await sb.from("rounds").insert({
@@ -173,6 +179,7 @@ async function renderRoundsTab() {
       course_number: courseNumber,
       start_at: startVal ? new Date(startVal).toISOString() : null,
       end_at: endVal ? new Date(endVal).toISOString() : null,
+      second_deadline: secondDeadlineVal ? new Date(secondDeadlineVal).toISOString() : null,
       reveal_at: revealVal ? new Date(revealVal).toISOString() : null,
       is_current: true,
       phase: "first_choice",
@@ -185,14 +192,25 @@ async function renderRoundsTab() {
 // 集計・抽選（ラウンドのタームは固定なので、枠ごとの集計のみ）
 // ============================================================
 async function renderMatchingTab() {
-  const { data: round } = await sb.from("rounds").select("*").eq("is_current", true).maybeSingle();
-  if (!round || !round.course_number) {
+  const { data: round0 } = await sb.from("rounds").select("*").eq("is_current", true).maybeSingle();
+  if (!round0 || !round0.course_number) {
     document.getElementById("tab-content").innerHTML = `<div class="notice info">現在のラウンドが設定されていません。「ラウンド管理」タブでラウンドを作成してください。</div>`;
+    return;
+  }
+
+  // 締切を過ぎていれば自動で抽選を実行してから表示する
+  const round = await window.tryRunLotteryIfDue(sb, round0);
+
+  if (round.phase.endsWith("_processing")) {
+    document.getElementById("tab-content").innerHTML = `<div class="notice info">現在、自動抽選を処理中です。数秒後に再読み込みしてください。</div>`;
     return;
   }
 
   const attempt = round.phase === "second_match" ? 2 : 1;
   const courseNumber = round.course_number;
+  const now = new Date();
+  const relevantDeadline = attempt === 2 ? round.second_deadline : round.end_at;
+  const deadlinePassed = relevantDeadline && now > new Date(relevantDeadline);
 
   const { data: prefs } = await sb
     .from("preferences")
@@ -227,6 +245,7 @@ async function renderMatchingTab() {
         <b>${window.COURSE_LABELS[courseNumber-1]}（第${round.round_number}ラウンド・${attempt===2?'2次マッチング':'1次'}）の集計</b>
         <span class="small-muted">状態: ${round.phase}</span>
       </div>
+      <p class="small-muted">${relevantDeadline ? `締切: ${new Date(relevantDeadline).toLocaleString("ja-JP")}${deadlinePassed ? '（締切超過 — 通常は自動で抽選されます）' : '（締切前は自由に希望を出せます。定員オーバーもOK）'}` : "締切未設定"}</p>
       <table class="slots" style="margin-top:10px;">
         <thead><tr><th>実習先</th><th>希望者数/定員</th><th>希望者</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="3" class="small-muted">まだ希望の提出がありません</td></tr>'}</tbody>
@@ -234,8 +253,8 @@ async function renderMatchingTab() {
     </div>
     <div class="card">
       <b>抽選・確定処理</b>
-      <p class="small-muted">定員を超えている枠についてランダムに当選者を決め、超過者は「lost」として記録します（2次マッチング対象になります）。定員内の枠は全員確定扱いになります。</p>
-      <button id="run-lottery">抽選を実行して確定する</button>
+      <p class="small-muted">通常は締切を過ぎると自動で実行されます（誰かがページを開いたタイミングで処理されます）。締切前でも今すぐ確定したい場合はこちらのボタンで手動実行できます。</p>
+      <button id="run-lottery">今すぐ抽選を実行する</button>
       <div id="lottery-result" class="small-muted" style="margin-top:8px;"></div>
     </div>
   `;
@@ -244,37 +263,10 @@ async function renderMatchingTab() {
     const btn = document.getElementById("run-lottery");
     btn.disabled = true;
     btn.textContent = "処理中...";
-    let confirmedCount = 0, lostCount = 0;
-
-    for (const g of groupList) {
-      const shuffled = g.items.slice().sort(() => Math.random() - 0.5);
-      const winners = shuffled.slice(0, g.cap);
-      const losers = shuffled.slice(g.cap);
-
-      for (const w of winners) {
-        await sb.from("preferences").update({ status: "confirmed" }).eq("id", w.id);
-        await sb.from("assignments").upsert({
-          student_id: w.student_id,
-          course_number: courseNumber,
-          slot_id: w.slot_id,
-        }, { onConflict: "student_id,course_number" });
-        confirmedCount++;
-      }
-      for (const l of losers) {
-        await sb.from("preferences").update({ status: "lost" }).eq("id", l.id);
-        lostCount++;
-      }
-    }
-
-    document.getElementById("lottery-result").textContent = `完了：確定 ${confirmedCount}件 / 抽選漏れ ${lostCount}件`;
-    btn.textContent = "抽選を実行して確定する";
+    const result = await window.runLotteryCore(sb, round, round.phase === "second_match" ? "second_match" : "first_choice");
+    document.getElementById("lottery-result").textContent = `完了：確定 ${result.confirmedCount}件 / 抽選漏れ ${result.lostCount}件`;
+    btn.textContent = "今すぐ抽選を実行する";
     btn.disabled = false;
-
-    if (lostCount > 0 && round.phase !== "second_match") {
-      await sb.from("rounds").update({ phase: "second_match" }).eq("id", round.id);
-    } else if (lostCount === 0) {
-      await sb.from("rounds").update({ phase: "closed" }).eq("id", round.id);
-    }
     renderMatchingTab();
   };
 }
