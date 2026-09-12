@@ -107,7 +107,11 @@ async function renderRoundsTab() {
       <td>第${r.round_number}R</td>
       <td>${r.course_number ? window.COURSE_LABELS[r.course_number-1] : "(未設定)"}</td>
       <td>${r.phase}</td>
-      <td>${r.deadline ? new Date(r.deadline).toLocaleString("ja-JP") : "-"}</td>
+      <td class="small-muted">
+        開始:${r.start_at ? new Date(r.start_at).toLocaleString("ja-JP") : "-"}<br/>
+        終了:${r.end_at ? new Date(r.end_at).toLocaleString("ja-JP") : "-"}<br/>
+        公開:${r.reveal_at ? new Date(r.reveal_at).toLocaleString("ja-JP") : "最初から公開"}
+      </td>
       <td>${r.is_current ? "★現在" : ""}</td>
       <td>${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在にする</button>` : ""}</td>
     </tr>`).join("");
@@ -122,7 +126,7 @@ async function renderRoundsTab() {
     <div class="card">
       <b>ラウンド一覧</b>
       <table class="slots" style="margin-top:10px;">
-        <thead><tr><th>ラウンド</th><th>ターム</th><th>状態</th><th>締切</th><th></th><th></th></tr></thead>
+        <thead><tr><th>ラウンド</th><th>ターム</th><th>状態</th><th>日程</th><th></th><th></th></tr></thead>
         <tbody>${rows || ""}</tbody>
       </table>
     </div>
@@ -134,8 +138,17 @@ async function renderRoundsTab() {
         <select id="new-course">${courseOptions}</select>
       </div>
       <div style="margin:10px 0;">
-        <label class="small-muted">締切日時（任意）</label>
-        <input type="datetime-local" id="new-deadline" />
+        <label class="small-muted">開始日時</label>
+        <input type="datetime-local" id="new-start" />
+      </div>
+      <div style="margin:10px 0;">
+        <label class="small-muted">終了日時（締切）</label>
+        <input type="datetime-local" id="new-end" />
+      </div>
+      <div style="margin:10px 0;">
+        <label class="small-muted">氏名の公開日時（ブラインド解除）</label>
+        <input type="datetime-local" id="new-reveal" />
+        <p class="small-muted">この日時までは、他の学生には「人数」のみ表示され、氏名は分かりません。空欄の場合は最初から氏名を公開します。</p>
       </div>
       <button id="create-round">作成して現在ラウンドにする</button>
     </div>
@@ -151,12 +164,16 @@ async function renderRoundsTab() {
 
   document.getElementById("create-round").onclick = async () => {
     const courseNumber = Number(document.getElementById("new-course").value);
-    const deadlineVal = document.getElementById("new-deadline").value;
+    const startVal = document.getElementById("new-start").value;
+    const endVal = document.getElementById("new-end").value;
+    const revealVal = document.getElementById("new-reveal").value;
     await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
     await sb.from("rounds").insert({
       round_number: nextRoundNumber,
       course_number: courseNumber,
-      deadline: deadlineVal ? new Date(deadlineVal).toISOString() : null,
+      start_at: startVal ? new Date(startVal).toISOString() : null,
+      end_at: endVal ? new Date(endVal).toISOString() : null,
+      reveal_at: revealVal ? new Date(revealVal).toISOString() : null,
       is_current: true,
       phase: "first_choice",
     });

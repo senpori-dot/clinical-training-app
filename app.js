@@ -16,6 +16,10 @@ function esc(s) {
   return d.innerHTML;
 }
 
+function fmtDate(d) {
+  return new Date(d).toLocaleString("ja-JP");
+}
+
 async function main() {
   const token = getToken();
   if (!token) {
@@ -109,11 +113,29 @@ async function renderApp(student, round, assignments) {
 
   const courseNumber = round.course_number;
   const courseLabel = window.COURSE_LABELS[courseNumber - 1];
+  const now = new Date();
 
-  // このタームがすでに決定済み(留学・地域枠等で先に確定している場合を含む)なら、選択不要
   if (filledCourses.has(courseNumber)) {
     html += `<div class="card"><b>現在のラウンド：${courseLabel}（第${round.round_number}ラウンド）</b></div>`;
     html += `<div class="notice confirmed">${courseLabel}はすでに決定済みです。今回のラウンドではあなたの操作は不要です。次のラウンドをお待ちください。</div>`;
+    appEl.innerHTML = html;
+    return;
+  }
+
+  html += `<div class="card"><b>現在のラウンド：${courseLabel}（第${round.round_number}ラウンド）</b>`;
+  if (round.start_at) html += `<div class="small-muted">開始: ${fmtDate(round.start_at)}</div>`;
+  if (round.end_at) html += `<div class="small-muted">終了(締切): ${fmtDate(round.end_at)}</div>`;
+  if (round.reveal_at) {
+    const revealed = now >= new Date(round.reveal_at);
+    html += `<div class="small-muted">${revealed ? `氏名は ${fmtDate(round.reveal_at)} に公開されました` : `氏名の公開: ${fmtDate(round.reveal_at)}（それまでは人数のみ表示）`}</div>`;
+  }
+  html += `</div>`;
+
+  const notStarted = round.start_at && now < new Date(round.start_at);
+  const ended = round.end_at && now > new Date(round.end_at);
+
+  if (notStarted) {
+    html += `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください。</div>`;
     appEl.innerHTML = html;
     return;
   }
@@ -128,17 +150,13 @@ async function renderApp(student, round, assignments) {
     .eq("attempt", attempt)
     .maybeSingle();
 
-  html += `<div class="card"><b>現在のラウンド：${courseLabel}（第${round.round_number}ラウンド）</b>`;
-  if (round.deadline) {
-    html += `<div class="small-muted">提出期限: ${new Date(round.deadline).toLocaleString("ja-JP")}</div>`;
-  }
-  html += `</div>`;
-
   let canEdit = false;
   let statusNotice = "";
 
   if (round.phase === "closed") {
     statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
+  } else if (ended) {
+    statusNotice = `<div class="notice info">受付終了時刻を過ぎました。抽選・確定処理をお待ちください。</div>`;
   } else if (attempt === 1) {
     if (!myPref || myPref.status === "submitted") {
       canEdit = true;
@@ -164,7 +182,6 @@ async function renderApp(student, round, assignments) {
 
   html += statusNotice;
 
-  // 残りターム数から見た「今回選ぶべき系統」の強制チェック
   const remainingTermsIncludingThis = 6 - filledCourses.size;
   const forceNaika = remaining.internal_medicine > 0 && remaining.internal_medicine === remainingTermsIncludingThis;
   const forceGeka = remaining.surgery > 0 && remaining.surgery === remainingTermsIncludingThis;
@@ -197,13 +214,14 @@ async function renderApp(student, round, assignments) {
     .eq("course_number", courseNumber);
 
   const forceFlags = { forceNaika, forceGeka, forceInternal, forceExternal };
+  const revealed = !round.reveal_at || now >= new Date(round.reveal_at);
 
-  renderLegend();
-  renderSingleGrid("internal", "院内", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags);
-  renderSingleGrid("external", "院外", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags);
+  renderLegend(revealed);
+  renderSingleGrid("internal", "院内", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
+  renderSingleGrid("external", "院外", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
 }
 
-function renderLegend() {
+function renderLegend(revealed) {
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">
       <div class="legend">
@@ -213,12 +231,15 @@ function renderLegend() {
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
         <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">セル内は「希望者数/定員」と出席番号です。太字は確定者、通常字は希望提出中の学生です。空いているセルをタップすると、その実習先を今回のタームの希望として提出できます。</p>
+      <p class="small-muted">${revealed
+        ? "氏名は公開されています。太字は確定者、通常字は希望提出中の学生です。"
+        : "現在は匿名期間中のため、他の人の希望は「人数」のみ表示され、氏名は分かりません。あなた自身の希望はいつでも確認できます。"}
+        空いているセルをタップすると、その実習先を今回のタームの希望として提出できます。</p>
     </div>
   `);
 }
 
-function renderSingleGrid(institutionType, label, courseNumber, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags) {
+function renderSingleGrid(institutionType, label, courseNumber, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
   const list = slots
     .filter(s => s.institution_type === institutionType)
     .sort((a, b) => (a.facility_name + a.department_name).localeCompare(b.facility_name + b.department_name, "ja"));
@@ -228,7 +249,7 @@ function renderSingleGrid(institutionType, label, courseNumber, slots, roundPref
   let rows = "";
   for (const s of list) {
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
-    const cell = renderCell(s, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags);
+    const cell = renderCell(s, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
     rows += `<tr class="${rowClass}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>${cell}</tr>`;
   }
 
@@ -249,7 +270,7 @@ function renderSingleGrid(institutionType, label, courseNumber, slots, roundPref
   });
 }
 
-function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags) {
+function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
   const cap = slot["cap_" + courseNumber];
   const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
 
@@ -265,14 +286,23 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id);
   const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.status !== "confirmed");
-
-  const namesHtml = [
-    ...confirmedHere.map(a => `<b>${a.students.attendance_number}</b>`),
-    ...pendingHere.map(p => `${p.students.attendance_number}`),
-  ].join(", ");
-
   const totalCount = confirmedHere.length + pendingHere.length;
   const isFull = totalCount >= cap && !isMine;
+
+  // 氏名表示ロジック：公開後はフルネーム、非公開中は自分だけ「あなた」と表示、他人数のみ
+  let namesHtml = "";
+  if (revealed) {
+    namesHtml = [
+      ...confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`),
+      ...pendingHere.map(p => `${esc(p.students.name)}${(myPref && p.slot_id===slot.id && p.student_id===student.id) ? "" : ""}`),
+    ].join("、 ");
+  } else {
+    const others = totalCount - (isMine ? 1 : 0);
+    const parts = [];
+    if (isMine) parts.push(`<b>あなた</b>`);
+    if (others > 0) parts.push(`他${others}名`);
+    namesHtml = parts.join(" + ");
+  }
 
   let eligible = canEdit && !isFull && (
     (slot.institution_type === "internal" && remaining.internal > 0) ||
