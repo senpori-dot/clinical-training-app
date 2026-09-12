@@ -20,6 +20,51 @@ function fmtDate(d) {
   return new Date(d).toLocaleString("ja-JP");
 }
 
+// ============================================================
+// 施設詳細モーダル
+// ============================================================
+function ensureModalRoot() {
+  if (document.getElementById("facility-modal-root")) return;
+  const div = document.createElement("div");
+  div.id = "facility-modal-root";
+  document.body.appendChild(div);
+}
+
+function closeFacilityModal() {
+  const root = document.getElementById("facility-modal-root");
+  if (root) root.innerHTML = "";
+}
+
+function openFacilityModal(info) {
+  ensureModalRoot();
+  const root = document.getElementById("facility-modal-root");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="modal-backdrop">
+      <div class="modal-box">
+        <div class="flex-between">
+          <b>${esc(info.facility_name)}</b>
+          <button class="small secondary" id="modal-close">閉じる</button>
+        </div>
+        <table class="slots" style="margin-top:10px;">
+          <tbody>
+            <tr><td style="width:90px;"><b>宿泊施設</b></td><td>${esc(info.accommodation) || "情報なし"}</td></tr>
+            <tr><td><b>集合時間</b></td><td>${esc(info.gather_time) || "情報なし"}</td></tr>
+            ${info.limit_note ? `<tr><td><b>人数上限</b></td><td>${esc(info.limit_note)}</td></tr>` : ""}
+          </tbody>
+        </table>
+        <div style="margin-top:10px;">
+          <b class="small-muted">実習先からの連絡事項等</b>
+          <p class="note-text" style="margin-top:6px;">${esc(info.note) || "特になし"}</p>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById("modal-close").onclick = closeFacilityModal;
+  document.getElementById("modal-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "modal-backdrop") closeFacilityModal();
+  });
+}
+
 async function main() {
   const token = getToken();
   if (!token) {
@@ -198,6 +243,9 @@ async function renderApp(student, round, assignments) {
   appEl.innerHTML = html;
 
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
+  const { data: facilityLimits } = await sb.from("facility_limits").select("*");
+  const limitMap = {};
+  (facilityLimits || []).forEach(f => { limitMap[f.facility_name] = f; });
 
   const { data: roundPrefs } = await sb
     .from("preferences")
@@ -210,13 +258,22 @@ async function renderApp(student, round, assignments) {
     .from("assignments")
     .select("slot_id, course_number, students(attendance_number, name)");
 
+  // 施設全体（同一施設・同一クール内の全診療科合計）の現在人数を集計
+  const facilityCountActive = {};
+  for (const s of slots) {
+    if (s.institution_type !== "external") continue;
+    const confirmedN = allAssignments.filter(a => a.slot_id === s.id && a.course_number === activeCourse).length;
+    const pendingN = roundPrefs.filter(p => p.slot_id === s.id && p.status !== "confirmed").length;
+    facilityCountActive[s.facility_name] = (facilityCountActive[s.facility_name] || 0) + confirmedN + pendingN;
+  }
+
   const forceFlags = { forceNaika, forceGeka, forceInternal, forceExternal };
   const revealed = !round.reveal_at || now >= new Date(round.reveal_at);
   const canEditNow = canEdit && !alreadyFilledThisTerm;
 
   renderLegend(revealed, courseLabel);
-  renderFullGrid("internal", "院内", activeCourse, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEditNow, remaining, forceFlags, revealed);
-  renderFullGrid("external", "院外", activeCourse, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEditNow, remaining, forceFlags, revealed);
+  renderFullGrid("internal", "院内", activeCourse, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEditNow, remaining, forceFlags, revealed, limitMap, facilityCountActive);
+  renderFullGrid("external", "院外", activeCourse, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEditNow, remaining, forceFlags, revealed, limitMap, facilityCountActive);
 }
 
 function renderLegend(revealed, courseLabel) {
@@ -230,27 +287,28 @@ function renderLegend(revealed, courseLabel) {
         <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
         <span><span class="sw" style="background:#2e7d6b;"></span>今回選べる列（${courseLabel}）</span>
       </div>
-      <p class="small-muted">①〜⑥すべての列を表示していますが、選択・変更できるのは緑色に強調された「今回のターム」の列だけです。それ以外の列は確定済みかどうかの参考表示です。${revealed
+      <p class="small-muted">施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。①〜⑥すべての列を表示していますが、選択・変更できるのは緑色に強調された「今回のターム」の列だけです。${revealed
         ? "氏名は公開されています。"
         : "現在は匿名期間中のため、今回のタームについては他の人の希望が「人数」のみ表示されます（あなた自身の希望は常に分かります）。"}</p>
     </div>
   `);
 }
 
-function renderFullGrid(institutionType, label, activeCourse, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
+function renderFullGrid(institutionType, label, activeCourse, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed, limitMap, facilityCountActive) {
   const list = slots
     .filter(s => s.institution_type === institutionType)
-    .sort((a, b) => (a.facility_name + a.department_name).localeCompare(b.facility_name + b.department_name, "ja"));
+    .sort((a, b) => a.sort_order - b.sort_order);
 
   if (list.length === 0) return;
 
   let rows = "";
   for (const s of list) {
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
-    rows += `<tr class="${rowClass}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>`;
+    const hasLimit = !!limitMap[s.facility_name];
+    rows += `<tr class="${rowClass}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}${hasLimit ? ' 🛈' : ''}</b><br/>${esc(s.department_name)}</td>`;
     for (let c = 1; c <= 6; c++) {
       const isActive = c === activeCourse;
-      rows += renderCell(s, c, isActive, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
+      rows += renderCell(s, c, isActive, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed, limitMap, facilityCountActive);
     }
     rows += `</tr>`;
   }
@@ -272,9 +330,25 @@ function renderFullGrid(institutionType, label, activeCourse, slots, roundPrefs,
   document.querySelectorAll(`td.cell-open[data-institution="${institutionType}"]`).forEach(td => {
     td.addEventListener("click", () => onCellClick(td, student, round, attempt, myPref));
   });
+
+  document.querySelectorAll(`td.facility-tap`).forEach(td => {
+    td.addEventListener("click", async () => {
+      const fname = td.dataset.facility;
+      const slot = list.find(s => s.facility_name === fname);
+      if (!slot) return;
+      const limit = limitMap[fname];
+      openFacilityModal({
+        facility_name: fname,
+        accommodation: slot.facility_accommodation || slot.accommodation,
+        gather_time: slot.facility_gather_time || slot.gather_time,
+        note: slot.facility_note || slot.note,
+        limit_note: limit ? `${limit.note}（1クールあたり施設全体で最大${limit.max_total}名）` : "",
+      });
+    });
+  });
 }
 
-function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
+function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed, limitMap, facilityCountActive) {
   const cap = slot["cap_" + courseNumber];
   const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
   const activeClass = isActive ? " col-active" : "";
@@ -288,7 +362,6 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
 
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
 
-  // ===== 今回のターム以外の列：確定状況の参考表示のみ、操作不可 =====
   if (!isActive) {
     const namesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("、 ");
     return `<td class="cell-slot cell-other-term">
@@ -297,12 +370,14 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
     </td>`;
   }
 
-  // ===== 今回のターム(選択可能な列) =====
   const isMine = !!(myPref && myPref.slot_id === slot.id &&
     (myPref.status === "submitted" || myPref.status === "lottery"));
   const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.status !== "confirmed");
   const totalCount = confirmedHere.length + pendingHere.length;
   const isFull = totalCount >= cap && !isMine;
+
+  const facilityLimit = limitMap[slot.facility_name];
+  const facilityFull = facilityLimit && facilityCountActive[slot.facility_name] >= facilityLimit.max_total && !isMine;
 
   let namesHtml = "";
   if (revealed) {
@@ -318,7 +393,7 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
     namesHtml = parts.join(" + ");
   }
 
-  let eligible = canEdit && !isFull && (
+  let eligible = canEdit && !isFull && !facilityFull && (
     (slot.institution_type === "internal" && remaining.internal > 0) ||
     (slot.institution_type === "external" && remaining.external > 0)
   ) && (
@@ -335,7 +410,7 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
 
   let cls = "cell-slot" + activeClass;
   if (isMine) cls += " cell-mine";
-  else if (isFull) cls += " cell-full";
+  else if (isFull || facilityFull) cls += " cell-full";
   else if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
@@ -343,9 +418,12 @@ function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, st
     ? `data-slot="${slot.id}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}"`
     : "";
 
+  const facilityFullNote = facilityFull && !isFull ? `<div class="cell-names">施設全体で満員</div>` : "";
+
   return `<td class="${cls}" ${dataAttrs}>
     <div class="cell-cap">${totalCount}/${cap}</div>
     ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
+    ${facilityFullNote}
   </td>`;
 }
 
