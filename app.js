@@ -111,76 +111,74 @@ async function renderApp(student, round, assignments) {
     return;
   }
 
-  const courseNumber = round.course_number;
-  const courseLabel = window.COURSE_LABELS[courseNumber - 1];
+  const activeCourse = round.course_number;
+  const courseLabel = window.COURSE_LABELS[activeCourse - 1];
   const now = new Date();
 
-  if (filledCourses.has(courseNumber)) {
-    html += `<div class="card"><b>現在のラウンド：${courseLabel}（第${round.round_number}ラウンド）</b></div>`;
-    html += `<div class="notice confirmed">${courseLabel}はすでに決定済みです。今回のラウンドではあなたの操作は不要です。次のラウンドをお待ちください。</div>`;
-    appEl.innerHTML = html;
-    return;
-  }
+  const alreadyFilledThisTerm = filledCourses.has(activeCourse);
 
-  html += `<div class="card"><b>現在のラウンド：${courseLabel}（第${round.round_number}ラウンド）</b>`;
+  html += `<div class="card"><b>現在のラウンド：<span style="color:#2e7d6b;">${courseLabel}</span>（第${round.round_number}ラウンド）</b>`;
   if (round.start_at) html += `<div class="small-muted">開始: ${fmtDate(round.start_at)}</div>`;
   if (round.end_at) html += `<div class="small-muted">終了(締切): ${fmtDate(round.end_at)}</div>`;
   if (round.reveal_at) {
-    const revealed = now >= new Date(round.reveal_at);
-    html += `<div class="small-muted">${revealed ? `氏名は ${fmtDate(round.reveal_at)} に公開されました` : `氏名の公開: ${fmtDate(round.reveal_at)}（それまでは人数のみ表示）`}</div>`;
+    const revealed0 = now >= new Date(round.reveal_at);
+    html += `<div class="small-muted">${revealed0 ? `氏名は ${fmtDate(round.reveal_at)} に公開されました` : `氏名の公開: ${fmtDate(round.reveal_at)}（それまでは人数のみ表示）`}</div>`;
   }
   html += `</div>`;
+
+  if (alreadyFilledThisTerm) {
+    html += `<div class="notice confirmed">${courseLabel}はすでに決定済みです。今回のラウンドではあなたの操作は不要です（下の表は参考表示です）。</div>`;
+  }
 
   const notStarted = round.start_at && now < new Date(round.start_at);
   const ended = round.end_at && now > new Date(round.end_at);
 
+  let canEdit = false;
+  let myPref = null;
+  let attempt = 1;
+
   if (notStarted) {
     html += `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください。</div>`;
-    appEl.innerHTML = html;
-    return;
-  }
+  } else if (!alreadyFilledThisTerm) {
+    attempt = round.phase === "second_match" ? 2 : 1;
+    const { data: pref } = await sb
+      .from("preferences")
+      .select("*, slots(facility_name, department_name)")
+      .eq("student_id", student.id)
+      .eq("round_id", round.id)
+      .eq("attempt", attempt)
+      .maybeSingle();
+    myPref = pref;
 
-  const attempt = round.phase === "second_match" ? 2 : 1;
-
-  const { data: myPref } = await sb
-    .from("preferences")
-    .select("*, slots(facility_name, department_name)")
-    .eq("student_id", student.id)
-    .eq("round_id", round.id)
-    .eq("attempt", attempt)
-    .maybeSingle();
-
-  let canEdit = false;
-  let statusNotice = "";
-
-  if (round.phase === "closed") {
-    statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
-  } else if (ended) {
-    statusNotice = `<div class="notice info">受付終了時刻を過ぎました。抽選・確定処理をお待ちください。</div>`;
-  } else if (attempt === 1) {
-    if (!myPref || myPref.status === "submitted") {
-      canEdit = true;
-      if (myPref) statusNotice = `<div class="notice confirmed">${courseLabel}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
-    } else if (myPref.status === "confirmed") {
-      statusNotice = `<div class="notice confirmed">${courseLabel}の希望は確定しました。次のラウンドをお待ちください。</div>`;
-    } else if (myPref.status === "lost") {
-      statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
-    }
-  } else {
-    if (!myPref) {
-      canEdit = true;
-      statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
-    } else if (myPref.status === "submitted") {
-      canEdit = true;
-      statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
-    } else if (myPref.status === "confirmed") {
-      statusNotice = `<div class="notice confirmed">2次希望が確定しました。次のラウンドをお待ちください。</div>`;
+    let statusNotice = "";
+    if (round.phase === "closed") {
+      statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
+    } else if (ended) {
+      statusNotice = `<div class="notice info">受付終了時刻を過ぎました。抽選・確定処理をお待ちください。</div>`;
+    } else if (attempt === 1) {
+      if (!myPref || myPref.status === "submitted") {
+        canEdit = true;
+        if (myPref) statusNotice = `<div class="notice confirmed">${courseLabel}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
+      } else if (myPref.status === "confirmed") {
+        statusNotice = `<div class="notice confirmed">${courseLabel}の希望は確定しました。次のラウンドをお待ちください。</div>`;
+      } else if (myPref.status === "lost") {
+        statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
+      }
     } else {
-      statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
+      if (!myPref) {
+        canEdit = true;
+        statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
+      } else if (myPref.status === "submitted") {
+        canEdit = true;
+        statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
+      } else if (myPref.status === "confirmed") {
+        statusNotice = `<div class="notice confirmed">2次希望が確定しました。次のラウンドをお待ちください。</div>`;
+      } else {
+        statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
+      }
     }
+    html += statusNotice;
   }
-
-  html += statusNotice;
 
   const remainingTermsIncludingThis = 6 - filledCourses.size;
   const forceNaika = remaining.internal_medicine > 0 && remaining.internal_medicine === remainingTermsIncludingThis;
@@ -193,7 +191,7 @@ async function renderApp(student, round, assignments) {
   if (forceGeka) forceMsgs.push("外科系");
   if (forceInternal) forceMsgs.push("院内");
   if (forceExternal) forceMsgs.push("院外");
-  if (forceMsgs.length > 0) {
+  if (!alreadyFilledThisTerm && forceMsgs.length > 0) {
     html += `<div class="notice warn">残りターム数の都合上、今回は「${forceMsgs.join("・")}」の中から選ぶ必要があります(そうしないと院内3/院外3・内科3/外科3を満たせなくなります)。</div>`;
   }
 
@@ -210,18 +208,18 @@ async function renderApp(student, round, assignments) {
 
   const { data: allAssignments } = await sb
     .from("assignments")
-    .select("slot_id, course_number, students(attendance_number, name)")
-    .eq("course_number", courseNumber);
+    .select("slot_id, course_number, students(attendance_number, name)");
 
   const forceFlags = { forceNaika, forceGeka, forceInternal, forceExternal };
   const revealed = !round.reveal_at || now >= new Date(round.reveal_at);
+  const canEditNow = canEdit && !alreadyFilledThisTerm;
 
-  renderLegend(revealed);
-  renderSingleGrid("internal", "院内", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
-  renderSingleGrid("external", "院外", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
+  renderLegend(revealed, courseLabel);
+  renderFullGrid("internal", "院内", activeCourse, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEditNow, remaining, forceFlags, revealed);
+  renderFullGrid("external", "院外", activeCourse, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEditNow, remaining, forceFlags, revealed);
 }
 
-function renderLegend(revealed) {
+function renderLegend(revealed, courseLabel) {
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">
       <div class="legend">
@@ -230,16 +228,16 @@ function renderLegend(revealed) {
         <span><span class="sw" style="background:#f6dede;"></span>満員</span>
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
         <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
+        <span><span class="sw" style="background:#2e7d6b;"></span>今回選べる列（${courseLabel}）</span>
       </div>
-      <p class="small-muted">${revealed
-        ? "氏名は公開されています。太字は確定者、通常字は希望提出中の学生です。"
-        : "現在は匿名期間中のため、他の人の希望は「人数」のみ表示され、氏名は分かりません。あなた自身の希望はいつでも確認できます。"}
-        空いているセルをタップすると、その実習先を今回のタームの希望として提出できます。</p>
+      <p class="small-muted">①〜⑥すべての列を表示していますが、選択・変更できるのは緑色に強調された「今回のターム」の列だけです。それ以外の列は確定済みかどうかの参考表示です。${revealed
+        ? "氏名は公開されています。"
+        : "現在は匿名期間中のため、今回のタームについては他の人の希望が「人数」のみ表示されます（あなた自身の希望は常に分かります）。"}</p>
     </div>
   `);
 }
 
-function renderSingleGrid(institutionType, label, courseNumber, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
+function renderFullGrid(institutionType, label, activeCourse, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
   const list = slots
     .filter(s => s.institution_type === institutionType)
     .sort((a, b) => (a.facility_name + a.department_name).localeCompare(b.facility_name + b.department_name, "ja"));
@@ -249,16 +247,22 @@ function renderSingleGrid(institutionType, label, courseNumber, slots, roundPref
   let rows = "";
   for (const s of list) {
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
-    const cell = renderCell(s, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
-    rows += `<tr class="${rowClass}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>${cell}</tr>`;
+    rows += `<tr class="${rowClass}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>`;
+    for (let c = 1; c <= 6; c++) {
+      const isActive = c === activeCourse;
+      rows += renderCell(s, c, isActive, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed);
+    }
+    rows += `</tr>`;
   }
+
+  const header = `<tr><th class="dept-col">実習先 / 診療科</th>${window.COURSE_LABELS.map((l, i) => `<th class="${i+1===activeCourse ? 'col-active' : ''}">${l}</th>`).join("")}</tr>`;
 
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">
       <b>${label}の実習先</b>
       <div class="grid-scroll" style="margin-top:8px;">
         <table class="pref-grid">
-          <thead><tr><th class="dept-col">実習先 / 診療科</th><th>${window.COURSE_LABELS[courseNumber-1]}</th></tr></thead>
+          <thead>${header}</thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -270,31 +274,41 @@ function renderSingleGrid(institutionType, label, courseNumber, slots, roundPref
   });
 }
 
-function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
+function renderCell(slot, courseNumber, isActive, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, revealed) {
   const cap = slot["cap_" + courseNumber];
   const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
+  const activeClass = isActive ? " col-active" : "";
 
   if (cap <= 0) {
-    return `<td class="cell-slot cell-blocked">×</td>`;
+    return `<td class="cell-slot cell-blocked${activeClass}">×</td>`;
   }
   if (isKuroshio) {
-    return `<td class="cell-slot cell-blocked">対象者のみ</td>`;
+    return `<td class="cell-slot cell-blocked${activeClass}">対象者のみ</td>`;
   }
 
+  const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
+
+  // ===== 今回のターム以外の列：確定状況の参考表示のみ、操作不可 =====
+  if (!isActive) {
+    const namesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("、 ");
+    return `<td class="cell-slot cell-other-term">
+      <div class="cell-cap">${confirmedHere.length}/${cap}</div>
+      ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
+    </td>`;
+  }
+
+  // ===== 今回のターム(選択可能な列) =====
   const isMine = !!(myPref && myPref.slot_id === slot.id &&
     (myPref.status === "submitted" || myPref.status === "lottery"));
-
-  const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id);
   const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.status !== "confirmed");
   const totalCount = confirmedHere.length + pendingHere.length;
   const isFull = totalCount >= cap && !isMine;
 
-  // 氏名表示ロジック：公開後はフルネーム、非公開中は自分だけ「あなた」と表示、他人数のみ
   let namesHtml = "";
   if (revealed) {
     namesHtml = [
       ...confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`),
-      ...pendingHere.map(p => `${esc(p.students.name)}${(myPref && p.slot_id===slot.id && p.student_id===student.id) ? "" : ""}`),
+      ...pendingHere.map(p => `${esc(p.students.name)}`),
     ].join("、 ");
   } else {
     const others = totalCount - (isMine ? 1 : 0);
@@ -319,7 +333,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     if (forceFlags.forceExternal && slot.institution_type !== "external") eligible = false;
   }
 
-  let cls = "cell-slot";
+  let cls = "cell-slot" + activeClass;
   if (isMine) cls += " cell-mine";
   else if (isFull) cls += " cell-full";
   else if (eligible) cls += " cell-open";
