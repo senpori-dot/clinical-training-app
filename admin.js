@@ -97,32 +97,42 @@ async function renderStudentsTab() {
 }
 
 // ============================================================
-// ラウンド管理
+// ラウンド管理（タームを1つ指定して、全員でそのタームを決めるラウンド）
 // ============================================================
 async function renderRoundsTab() {
   const { data: rounds } = await sb.from("rounds").select("*").order("round_number");
 
   let rows = (rounds || []).map(r => `
     <tr>
-      <td>第${r.round_number}希望</td>
+      <td>第${r.round_number}R</td>
+      <td>${r.course_number ? window.COURSE_LABELS[r.course_number-1] : "(未設定)"}</td>
       <td>${r.phase}</td>
       <td>${r.deadline ? new Date(r.deadline).toLocaleString("ja-JP") : "-"}</td>
       <td>${r.is_current ? "★現在" : ""}</td>
-      <td>${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在ラウンドにする</button>` : ""}</td>
+      <td>${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在にする</button>` : ""}</td>
     </tr>`).join("");
 
   const nextRoundNumber = rounds && rounds.length ? Math.max(...rounds.map(r=>r.round_number)) + 1 : 1;
+  const usedCourses = new Set((rounds || []).map(r => r.course_number).filter(Boolean));
+  const courseOptions = [1,2,3,4,5,6].map(c =>
+    `<option value="${c}" ${usedCourses.has(c) ? "" : ""}>${window.COURSE_LABELS[c-1]}${usedCourses.has(c)?"（実施済み）":""}</option>`
+  ).join("");
 
   document.getElementById("tab-content").innerHTML = `
     <div class="card">
       <b>ラウンド一覧</b>
       <table class="slots" style="margin-top:10px;">
-        <thead><tr><th>ラウンド</th><th>状態</th><th>締切</th><th></th><th></th></tr></thead>
+        <thead><tr><th>ラウンド</th><th>ターム</th><th>状態</th><th>締切</th><th></th><th></th></tr></thead>
         <tbody>${rows || ""}</tbody>
       </table>
     </div>
     <div class="card">
-      <b>新しいラウンドを作成（第${nextRoundNumber}希望）</b>
+      <b>新しいラウンドを作成（第${nextRoundNumber}ラウンド）</b>
+      <p class="small-muted">推奨順の例: ⑤→①→⑥→②→④→③ (就活に影響する⑤⑥を先に、進路科目を選びやすい①〜④を後半にする案)</p>
+      <div style="margin:10px 0;">
+        <label class="small-muted">今回決めるターム(クール)</label>
+        <select id="new-course">${courseOptions}</select>
+      </div>
       <div style="margin:10px 0;">
         <label class="small-muted">締切日時（任意）</label>
         <input type="datetime-local" id="new-deadline" />
@@ -140,10 +150,12 @@ async function renderRoundsTab() {
   });
 
   document.getElementById("create-round").onclick = async () => {
+    const courseNumber = Number(document.getElementById("new-course").value);
     const deadlineVal = document.getElementById("new-deadline").value;
     await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
     await sb.from("rounds").insert({
       round_number: nextRoundNumber,
+      course_number: courseNumber,
       deadline: deadlineVal ? new Date(deadlineVal).toISOString() : null,
       is_current: true,
       phase: "first_choice",
@@ -153,16 +165,17 @@ async function renderRoundsTab() {
 }
 
 // ============================================================
-// 集計・抽選
+// 集計・抽選（ラウンドのタームは固定なので、枠ごとの集計のみ）
 // ============================================================
 async function renderMatchingTab() {
   const { data: round } = await sb.from("rounds").select("*").eq("is_current", true).maybeSingle();
-  if (!round) {
+  if (!round || !round.course_number) {
     document.getElementById("tab-content").innerHTML = `<div class="notice info">現在のラウンドが設定されていません。「ラウンド管理」タブでラウンドを作成してください。</div>`;
     return;
   }
 
   const attempt = round.phase === "second_match" ? 2 : 1;
+  const courseNumber = round.course_number;
 
   const { data: prefs } = await sb
     .from("preferences")
@@ -172,20 +185,19 @@ async function renderMatchingTab() {
 
   const groups = {};
   for (const p of (prefs || [])) {
-    const key = `${p.slot_id}_${p.course_number}`;
+    const key = p.slot_id;
     if (!groups[key]) {
-      groups[key] = { slot: p.slots, course_number: p.course_number, cap: p.slots["cap_"+p.course_number], items: [] };
+      groups[key] = { slot: p.slots, cap: p.slots["cap_"+courseNumber], items: [] };
     }
     groups[key].items.push(p);
   }
 
-  const groupList = Object.values(groups).sort((a,b)=>a.course_number-b.course_number);
+  const groupList = Object.values(groups);
 
   let rows = groupList.map(g => {
     const overflow = g.items.length > g.cap;
     const names = g.items.map(i => `${i.students.attendance_number} ${esc(i.students.name)}${i.status!=='submitted' ? `(${i.status})` : ''}`).join("、 ");
     return `<tr class="${overflow?'overflow':''}">
-      <td>${window.COURSE_LABELS[g.course_number-1]}</td>
       <td>${esc(g.slot.facility_name)} ${esc(g.slot.department_name)}</td>
       <td class="cap">${g.items.length} / ${g.cap}</td>
       <td class="small-muted">${names}</td>
@@ -195,12 +207,12 @@ async function renderMatchingTab() {
   document.getElementById("tab-content").innerHTML = `
     <div class="card">
       <div class="flex-between">
-        <b>第${round.round_number}希望ラウンド（${attempt===2?'2次マッチング':'1次'}）の集計</b>
+        <b>${window.COURSE_LABELS[courseNumber-1]}（第${round.round_number}ラウンド・${attempt===2?'2次マッチング':'1次'}）の集計</b>
         <span class="small-muted">状態: ${round.phase}</span>
       </div>
       <table class="slots" style="margin-top:10px;">
-        <thead><tr><th>クール</th><th>実習先</th><th>希望者数/定員</th><th>希望者</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="4" class="small-muted">まだ希望の提出がありません</td></tr>'}</tbody>
+        <thead><tr><th>実習先</th><th>希望者数/定員</th><th>希望者</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="3" class="small-muted">まだ希望の提出がありません</td></tr>'}</tbody>
       </table>
     </div>
     <div class="card">
@@ -226,7 +238,7 @@ async function renderMatchingTab() {
         await sb.from("preferences").update({ status: "confirmed" }).eq("id", w.id);
         await sb.from("assignments").upsert({
           student_id: w.student_id,
-          course_number: w.course_number,
+          course_number: courseNumber,
           slot_id: w.slot_id,
         }, { onConflict: "student_id,course_number" });
         confirmedCount++;

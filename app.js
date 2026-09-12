@@ -101,8 +101,19 @@ async function renderApp(student, round, assignments) {
     return;
   }
 
-  if (!round) {
+  if (!round || !round.course_number) {
     html += `<div class="notice info">現在、募集中のラウンドはありません。事務局からの案内をお待ちください。</div>`;
+    appEl.innerHTML = html;
+    return;
+  }
+
+  const courseNumber = round.course_number;
+  const courseLabel = window.COURSE_LABELS[courseNumber - 1];
+
+  // このタームがすでに決定済み(留学・地域枠等で先に確定している場合を含む)なら、選択不要
+  if (filledCourses.has(courseNumber)) {
+    html += `<div class="card"><b>現在のラウンド：${courseLabel}（第${round.round_number}ラウンド）</b></div>`;
+    html += `<div class="notice confirmed">${courseLabel}はすでに決定済みです。今回のラウンドではあなたの操作は不要です。次のラウンドをお待ちください。</div>`;
     appEl.innerHTML = html;
     return;
   }
@@ -117,13 +128,12 @@ async function renderApp(student, round, assignments) {
     .eq("attempt", attempt)
     .maybeSingle();
 
-  html += `<div class="card"><b>現在のラウンド：第${round.round_number}希望</b>`;
+  html += `<div class="card"><b>現在のラウンド：${courseLabel}（第${round.round_number}ラウンド）</b>`;
   if (round.deadline) {
     html += `<div class="small-muted">提出期限: ${new Date(round.deadline).toLocaleString("ja-JP")}</div>`;
   }
   html += `</div>`;
 
-  // 編集可否の判定
   let canEdit = false;
   let statusNotice = "";
 
@@ -132,14 +142,13 @@ async function renderApp(student, round, assignments) {
   } else if (attempt === 1) {
     if (!myPref || myPref.status === "submitted") {
       canEdit = true;
-      if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
+      if (myPref) statusNotice = `<div class="notice confirmed">${courseLabel}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
     } else if (myPref.status === "confirmed") {
-      statusNotice = `<div class="notice confirmed">このラウンドの希望は確定しました。次のラウンドをお待ちください。</div>`;
+      statusNotice = `<div class="notice confirmed">${courseLabel}の希望は確定しました。次のラウンドをお待ちください。</div>`;
     } else if (myPref.status === "lost") {
       statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
     }
   } else {
-    // attempt === 2 (second_match)
     if (!myPref) {
       canEdit = true;
       statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
@@ -154,24 +163,44 @@ async function renderApp(student, round, assignments) {
   }
 
   html += statusNotice;
+
+  // 残りターム数から見た「今回選ぶべき系統」の強制チェック
+  const remainingTermsIncludingThis = 6 - filledCourses.size;
+  const forceNaika = remaining.internal_medicine > 0 && remaining.internal_medicine === remainingTermsIncludingThis;
+  const forceGeka = remaining.surgery > 0 && remaining.surgery === remainingTermsIncludingThis;
+  const forceInternal = remaining.internal > 0 && remaining.internal === remainingTermsIncludingThis;
+  const forceExternal = remaining.external > 0 && remaining.external === remainingTermsIncludingThis;
+
+  const forceMsgs = [];
+  if (forceNaika) forceMsgs.push("内科系");
+  if (forceGeka) forceMsgs.push("外科系");
+  if (forceInternal) forceMsgs.push("院内");
+  if (forceExternal) forceMsgs.push("院外");
+  if (forceMsgs.length > 0) {
+    html += `<div class="notice warn">残りターム数の都合上、今回は「${forceMsgs.join("・")}」の中から選ぶ必要があります(そうしないと院内3/院外3・内科3/外科3を満たせなくなります)。</div>`;
+  }
+
   appEl.innerHTML = html;
 
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
 
   const { data: roundPrefs } = await sb
     .from("preferences")
-    .select("slot_id, course_number, status, students(attendance_number, name)")
+    .select("slot_id, status, students(attendance_number, name)")
     .eq("round_id", round.id)
     .eq("attempt", attempt)
     .in("status", ["submitted", "lottery", "confirmed"]);
 
   const { data: allAssignments } = await sb
     .from("assignments")
-    .select("slot_id, course_number, students(attendance_number, name)");
+    .select("slot_id, course_number, students(attendance_number, name)")
+    .eq("course_number", courseNumber);
+
+  const forceFlags = { forceNaika, forceGeka, forceInternal, forceExternal };
 
   renderLegend();
-  renderGrid("internal", "院内", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, filledCourses);
-  renderGrid("external", "院外", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, filledCourses);
+  renderSingleGrid("internal", "院内", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags);
+  renderSingleGrid("external", "院外", courseNumber, slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags);
 }
 
 function renderLegend() {
@@ -184,12 +213,12 @@ function renderLegend() {
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
         <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">セル内は「希望者数/定員」と出席番号です。太字は確定者、通常字は希望提出中の学生です。空いているセルをタップすると、そのクール・実習先を希望として提出できます。</p>
+      <p class="small-muted">セル内は「希望者数/定員」と出席番号です。太字は確定者、通常字は希望提出中の学生です。空いているセルをタップすると、その実習先を今回のタームの希望として提出できます。</p>
     </div>
   `);
 }
 
-function renderGrid(institutionType, label, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, filledCourses) {
+function renderSingleGrid(institutionType, label, courseNumber, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags) {
   const list = slots
     .filter(s => s.institution_type === institutionType)
     .sort((a, b) => (a.facility_name + a.department_name).localeCompare(b.facility_name + b.department_name, "ja"));
@@ -199,21 +228,16 @@ function renderGrid(institutionType, label, slots, roundPrefs, allAssignments, s
   let rows = "";
   for (const s of list) {
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
-    rows += `<tr class="${rowClass}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>`;
-    for (let c = 1; c <= 6; c++) {
-      rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, filledCourses);
-    }
-    rows += `</tr>`;
+    const cell = renderCell(s, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags);
+    rows += `<tr class="${rowClass}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>${cell}</tr>`;
   }
-
-  const header = `<tr><th class="dept-col">実習先 / 診療科</th>${window.COURSE_LABELS.map(l => `<th>${l}</th>`).join("")}</tr>`;
 
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">
       <b>${label}の実習先</b>
       <div class="grid-scroll" style="margin-top:8px;">
         <table class="pref-grid">
-          <thead>${header}</thead>
+          <thead><tr><th class="dept-col">実習先 / 診療科</th><th>${window.COURSE_LABELS[courseNumber-1]}</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
@@ -225,23 +249,22 @@ function renderGrid(institutionType, label, slots, roundPrefs, allAssignments, s
   });
 }
 
-function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, filledCourses) {
+function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags) {
   const cap = slot["cap_" + courseNumber];
   const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
 
   if (cap <= 0) {
     return `<td class="cell-slot cell-blocked">×</td>`;
   }
-
   if (isKuroshio) {
     return `<td class="cell-slot cell-blocked">対象者のみ</td>`;
   }
 
-  const isMine = !!(myPref && myPref.slot_id === slot.id && myPref.course_number === courseNumber &&
+  const isMine = !!(myPref && myPref.slot_id === slot.id &&
     (myPref.status === "submitted" || myPref.status === "lottery"));
 
-  const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
-  const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.course_number === courseNumber && p.status !== "confirmed");
+  const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id);
+  const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.status !== "confirmed");
 
   const namesHtml = [
     ...confirmedHere.map(a => `<b>${a.students.attendance_number}</b>`),
@@ -251,9 +274,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const totalCount = confirmedHere.length + pendingHere.length;
   const isFull = totalCount >= cap && !isMine;
 
-  const courseAlreadyFilledByMe = filledCourses.has(courseNumber);
-
-  const eligible = canEdit && !courseAlreadyFilledByMe && !isFull && (
+  let eligible = canEdit && !isFull && (
     (slot.institution_type === "internal" && remaining.internal > 0) ||
     (slot.institution_type === "external" && remaining.external > 0)
   ) && (
@@ -261,15 +282,21 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     (slot.category === "surgery" && remaining.surgery > 0)
   );
 
+  if (eligible) {
+    if (forceFlags.forceNaika && slot.category !== "internal_medicine") eligible = false;
+    if (forceFlags.forceGeka && slot.category !== "surgery") eligible = false;
+    if (forceFlags.forceInternal && slot.institution_type !== "internal") eligible = false;
+    if (forceFlags.forceExternal && slot.institution_type !== "external") eligible = false;
+  }
+
   let cls = "cell-slot";
   if (isMine) cls += " cell-mine";
   else if (isFull) cls += " cell-full";
-  else if (courseAlreadyFilledByMe) cls += " cell-col-filled";
   else if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
   const dataAttrs = eligible
-    ? `data-slot="${slot.id}" data-course="${courseNumber}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}"`
+    ? `data-slot="${slot.id}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}"`
     : "";
 
   return `<td class="${cls}" ${dataAttrs}>
@@ -280,19 +307,18 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
 async function onCellClick(td, student, round, attempt, myPref) {
   const slotId = td.dataset.slot;
-  const courseNumber = Number(td.dataset.course);
   const facility = td.dataset.facility;
   const dept = td.dataset.dept;
-  const label = window.COURSE_LABELS[courseNumber - 1];
+  const courseLabel = window.COURSE_LABELS[round.course_number - 1];
 
-  const ok = confirm(`${label}「${facility} ${dept}」を希望として提出します。よろしいですか？`);
+  const ok = confirm(`${courseLabel}「${facility} ${dept}」を希望として提出します。よろしいですか？`);
   if (!ok) return;
 
   td.style.opacity = "0.5";
 
   if (myPref) {
     const { error } = await sb.from("preferences")
-      .update({ slot_id: slotId, course_number: courseNumber, status: "submitted" })
+      .update({ slot_id: slotId, course_number: round.course_number, status: "submitted" })
       .eq("id", myPref.id);
     if (error) { alert("送信に失敗しました: " + error.message); td.style.opacity = "1"; return; }
   } else {
@@ -300,7 +326,7 @@ async function onCellClick(td, student, round, attempt, myPref) {
       student_id: student.id,
       round_id: round.id,
       slot_id: slotId,
-      course_number: courseNumber,
+      course_number: round.course_number,
       attempt: attempt,
       status: "submitted",
     });
