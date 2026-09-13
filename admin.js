@@ -104,8 +104,7 @@ async function renderRoundsTab() {
 
   let rows = (rounds || []).map(r => `
     <tr>
-      <td>第${r.round_number}R</td>
-      <td>${r.course_number ? window.COURSE_LABELS[r.course_number-1] : "(未設定)"}</td>
+      <td>第${r.round_number}希望</td>
       <td>${r.phase}</td>
       <td class="small-muted">
         開始:${r.start_at ? new Date(r.start_at).toLocaleString("ja-JP") : "-"}<br/>
@@ -118,26 +117,18 @@ async function renderRoundsTab() {
     </tr>`).join("");
 
   const nextRoundNumber = rounds && rounds.length ? Math.max(...rounds.map(r=>r.round_number)) + 1 : 1;
-  const usedCourses = new Set((rounds || []).map(r => r.course_number).filter(Boolean));
-  const courseOptions = [1,2,3,4,5,6].map(c =>
-    `<option value="${c}" ${usedCourses.has(c) ? "" : ""}>${window.COURSE_LABELS[c-1]}${usedCourses.has(c)?"（実施済み）":""}</option>`
-  ).join("");
 
   document.getElementById("tab-content").innerHTML = `
     <div class="card">
       <b>ラウンド一覧</b>
       <table class="slots" style="margin-top:10px;">
-        <thead><tr><th>ラウンド</th><th>ターム</th><th>状態</th><th>日程</th><th></th><th></th></tr></thead>
+        <thead><tr><th>ラウンド</th><th>状態</th><th>日程</th><th></th><th></th></tr></thead>
         <tbody>${rows || ""}</tbody>
       </table>
     </div>
     <div class="card">
-      <b>新しいラウンドを作成（第${nextRoundNumber}ラウンド）</b>
-      <p class="small-muted">推奨順の例: ⑤→①→⑥→②→④→③ (就活に影響する⑤⑥を先に、進路科目を選びやすい①〜④を後半にする案)</p>
-      <div style="margin:10px 0;">
-        <label class="small-muted">今回決めるターム(クール)</label>
-        <select id="new-course">${courseOptions}</select>
-      </div>
+      <b>新しいラウンドを作成（第${nextRoundNumber}希望）</b>
+      <p class="small-muted">学生は①〜⑥のうち、まだ決まっていないクールから自由に実習先を選んで希望を出せます。</p>
       <div style="margin:10px 0;">
         <label class="small-muted">開始日時</label>
         <input type="datetime-local" id="new-start" />
@@ -151,9 +142,9 @@ async function renderRoundsTab() {
         <input type="datetime-local" id="new-second-deadline" />
       </div>
       <div style="margin:10px 0;">
-        <label class="small-muted">氏名の公開日時（ブラインド解除）</label>
+        <label class="small-muted">氏名の全体公開日時（ブラインド解除）</label>
         <input type="datetime-local" id="new-reveal" />
-        <p class="small-muted">この日時までは、他の学生には「人数」のみ表示され、氏名は分かりません。空欄の場合は最初から氏名を公開します。</p>
+        <p class="small-muted">この日時までは、他の学生には基本的に「人数」のみ表示されます（本人が公開した場合・宿泊調整が必要な施設は表示されます）。空欄の場合は最初から氏名を公開します。</p>
       </div>
       <button id="create-round">作成して現在ラウンドにする</button>
     </div>
@@ -168,7 +159,6 @@ async function renderRoundsTab() {
   });
 
   document.getElementById("create-round").onclick = async () => {
-    const courseNumber = Number(document.getElementById("new-course").value);
     const startVal = document.getElementById("new-start").value;
     const endVal = document.getElementById("new-end").value;
     const secondDeadlineVal = document.getElementById("new-second-deadline").value;
@@ -176,7 +166,7 @@ async function renderRoundsTab() {
     await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
     await sb.from("rounds").insert({
       round_number: nextRoundNumber,
-      course_number: courseNumber,
+      course_number: null,
       start_at: startVal ? new Date(startVal).toISOString() : null,
       end_at: endVal ? new Date(endVal).toISOString() : null,
       second_deadline: secondDeadlineVal ? new Date(secondDeadlineVal).toISOString() : null,
@@ -193,12 +183,11 @@ async function renderRoundsTab() {
 // ============================================================
 async function renderMatchingTab() {
   const { data: round0 } = await sb.from("rounds").select("*").eq("is_current", true).maybeSingle();
-  if (!round0 || !round0.course_number) {
+  if (!round0) {
     document.getElementById("tab-content").innerHTML = `<div class="notice info">現在のラウンドが設定されていません。「ラウンド管理」タブでラウンドを作成してください。</div>`;
     return;
   }
 
-  // 締切を過ぎていれば自動で抽選を実行してから表示する
   const round = await window.tryRunLotteryIfDue(sb, round0);
 
   if (round.phase.endsWith("_processing")) {
@@ -207,7 +196,6 @@ async function renderMatchingTab() {
   }
 
   const attempt = round.phase === "second_match" ? 2 : 1;
-  const courseNumber = round.course_number;
   const now = new Date();
   const relevantDeadline = attempt === 2 ? round.second_deadline : round.end_at;
   const deadlinePassed = relevantDeadline && now > new Date(relevantDeadline);
@@ -220,19 +208,20 @@ async function renderMatchingTab() {
 
   const groups = {};
   for (const p of (prefs || [])) {
-    const key = p.slot_id;
+    const key = p.slot_id + "_" + p.course_number;
     if (!groups[key]) {
-      groups[key] = { slot: p.slots, cap: p.slots["cap_"+courseNumber], items: [] };
+      groups[key] = { slot: p.slots, courseNumber: p.course_number, cap: p.slots["cap_"+p.course_number], items: [] };
     }
     groups[key].items.push(p);
   }
 
-  const groupList = Object.values(groups);
+  const groupList = Object.values(groups).sort((a,b)=>a.courseNumber-b.courseNumber);
 
   let rows = groupList.map(g => {
     const overflow = g.items.length > g.cap;
     const names = g.items.map(i => `${i.students.attendance_number} ${esc(i.students.name)}${i.status!=='submitted' ? `(${i.status})` : ''}`).join("、 ");
     return `<tr class="${overflow?'overflow':''}">
+      <td>${window.COURSE_LABELS[g.courseNumber-1]}</td>
       <td>${esc(g.slot.facility_name)} ${esc(g.slot.department_name)}</td>
       <td class="cap">${g.items.length} / ${g.cap}</td>
       <td class="small-muted">${names}</td>
@@ -242,13 +231,13 @@ async function renderMatchingTab() {
   document.getElementById("tab-content").innerHTML = `
     <div class="card">
       <div class="flex-between">
-        <b>${window.COURSE_LABELS[courseNumber-1]}（第${round.round_number}ラウンド・${attempt===2?'2次マッチング':'1次'}）の集計</b>
+        <b>第${round.round_number}希望（${attempt===2?'2次マッチング':'1次'}）の集計</b>
         <span class="small-muted">状態: ${round.phase}</span>
       </div>
       <p class="small-muted">${relevantDeadline ? `締切: ${new Date(relevantDeadline).toLocaleString("ja-JP")}${deadlinePassed ? '（締切超過 — 通常は自動で抽選されます）' : '（締切前は自由に希望を出せます。定員オーバーもOK）'}` : "締切未設定"}</p>
       <table class="slots" style="margin-top:10px;">
-        <thead><tr><th>実習先</th><th>希望者数/定員</th><th>希望者</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="3" class="small-muted">まだ希望の提出がありません</td></tr>'}</tbody>
+        <thead><tr><th>クール</th><th>実習先</th><th>希望者数/定員</th><th>希望者</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="small-muted">まだ希望の提出がありません</td></tr>'}</tbody>
       </table>
     </div>
     <div class="card">

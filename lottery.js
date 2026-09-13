@@ -1,11 +1,11 @@
 // ============================================================
 // 抽選の共通ロジック（学生ページ・管理画面の両方から呼び出す）
 // ============================================================
-// 期限を過ぎていて、まだ処理されていないラウンドがあれば自動で抽選を実行する。
-// 複数人が同時にページを開いても二重実行されないよう、
-// phase を「処理中」に更新できた人だけが実際の処理を担当する（楽観的ロック）。
+// ラウンドは「第◯希望」というランク。学生は①〜⑥のうちまだ決まっていない
+// クールの中から自由に(実習先, クール)の組を選んで希望を出す。
+// 締切を過ぎたら、(実習先, クール)ごとに集計して定員超過分を抽選する。
 window.tryRunLotteryIfDue = async function (sb, round) {
-  if (!round || !round.course_number) return round;
+  if (!round) return round;
   const now = new Date();
 
   let phaseToProcess = null;
@@ -25,7 +25,6 @@ window.tryRunLotteryIfDue = async function (sb, round) {
     .select();
 
   if (!locked || locked.length === 0) {
-    // 他の人がすでに処理中、または処理済み。最新状態を取り直す
     const { data: fresh } = await sb.from("rounds").select("*").eq("id", round.id).maybeSingle();
     return fresh || round;
   }
@@ -36,14 +35,13 @@ window.tryRunLotteryIfDue = async function (sb, round) {
   return fresh || round;
 };
 
-// 実際の抽選処理本体（施設全体の人数上限も考慮したグローバル抽選）
+// 実際の抽選処理本体：(実習先, クール)ごと、かつ施設全体の人数上限も考慮したグローバル抽選
 window.runLotteryCore = async function (sb, round, phaseToProcess) {
   const attempt = phaseToProcess === "second_match" ? 2 : 1;
-  const courseNumber = round.course_number;
 
   const { data: prefs } = await sb
     .from("preferences")
-    .select("id, student_id, slot_id, status, slots(cap_1,cap_2,cap_3,cap_4,cap_5,cap_6, facility_name)")
+    .select("id, student_id, slot_id, course_number, status, slots(cap_1,cap_2,cap_3,cap_4,cap_5,cap_6, facility_name)")
     .eq("round_id", round.id)
     .eq("attempt", attempt)
     .eq("status", "submitted");
@@ -53,25 +51,27 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
   (facilityLimits || []).forEach(f => { limitMap[f.facility_name] = f.max_total; });
 
   const shuffled = (prefs || []).slice().sort(() => Math.random() - 0.5);
-  const slotCount = {};
-  const facilityCount = {};
+  const slotCourseCount = {}; // key: slot_id + '_' + course_number
+  const facilityCourseCount = {}; // key: facility_name + '_' + course_number
   let confirmedCount = 0, lostCount = 0;
 
   for (const p of shuffled) {
-    const cap = p.slots["cap_" + courseNumber];
+    const cap = p.slots["cap_" + p.course_number];
     const fname = p.slots.facility_name;
-    const curSlot = slotCount[p.slot_id] || 0;
-    const curFac = facilityCount[fname] || 0;
+    const slotKey = p.slot_id + "_" + p.course_number;
+    const facKey = fname + "_" + p.course_number;
+    const curSlot = slotCourseCount[slotKey] || 0;
+    const curFac = facilityCourseCount[facKey] || 0;
     const facLimit = limitMap[fname];
 
     if (curSlot < cap && (!facLimit || curFac < facLimit)) {
       await sb.from("preferences").update({ status: "confirmed" }).eq("id", p.id);
       await sb.from("assignments").upsert(
-        { student_id: p.student_id, course_number: courseNumber, slot_id: p.slot_id },
+        { student_id: p.student_id, course_number: p.course_number, slot_id: p.slot_id },
         { onConflict: "student_id,course_number" }
       );
-      slotCount[p.slot_id] = curSlot + 1;
-      facilityCount[fname] = curFac + 1;
+      slotCourseCount[slotKey] = curSlot + 1;
+      facilityCourseCount[facKey] = curFac + 1;
       confirmedCount++;
     } else {
       await sb.from("preferences").update({ status: "lost" }).eq("id", p.id);
@@ -81,7 +81,7 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
 
   const nextPhase = phaseToProcess === "first_choice"
     ? (lostCount > 0 ? "second_match" : "closed")
-    : "closed"; // 2次マッチング後は締める（さらに残った人は次のラウンドで別途拾う）
+    : "closed";
 
   await sb.from("rounds").update({ phase: nextPhase }).eq("id", round.id);
 
