@@ -116,6 +116,7 @@ button:disabled { background: #b9c0bc; cursor: not-allowed; }
 .notice.info { background: #eaf1ee; color: var(--accent); }
 .notice.warn { background: #fbeeee; color: var(--danger); }
 .notice.confirmed { background: #eef4fb; color: var(--navy); }
+.notice.success { background: #e3f3e2; color: #1e6b3a; font-weight: 600; }
 
 .note-text {
   font-size: 0.78rem;
@@ -186,6 +187,7 @@ td.cell-col-filled { opacity: 0.35; }
 td.cell-open { cursor: pointer; }
 td.cell-open:active { background: #d7ecec; }
 td.cell-overbook { box-shadow: inset 0 0 0 2px #d99a3a; }
+td.cell-overflow { box-shadow: inset 0 0 0 2px #b3413a; background: #fbeceb; }
 td.cell-mine { outline: 3px solid var(--accent); outline-offset: -3px; background: #d9f0e8 !important; font-weight: 700; }
 td.cell-ineligible { color: #bbb; }
 td.cell-other-term { color: #8a8f8a; background: #f4f5f3; }
@@ -195,6 +197,7 @@ td.col-active { box-shadow: inset 0 0 0 2px #2e7d6b; }
 .cell-cap { font-weight: 700; }
 .cell-names { font-size: 0.62rem; color: var(--muted); line-height: 1.2; }
 .cell-names b { color: var(--navy); }
+.me-confirmed { color: #1e6b3a; font-weight: 800; background: #d9f0e0; padding: 1px 4px; border-radius: 4px; }
 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.75rem; margin: 8px 0; }
 .legend span.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }

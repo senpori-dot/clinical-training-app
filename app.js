@@ -180,7 +180,7 @@ async function renderApp(student, round, assignments) {
 
   let canEdit = false;
   let myPref = null;
-  let attempt = round.phase === "second_match" ? 2 : 1;
+  let attempt = 1;
 
   if (notStarted) {
     html += `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください。</div>`;
@@ -188,42 +188,75 @@ async function renderApp(student, round, assignments) {
     return;
   }
 
-  const { data: pref } = await sb
+  // まず「第1希望(attempt=1)」の自分の結果を必ず確認する。
+  // (ラウンド全体が2次マッチングに進んでいても、自分は1次で当選している場合があるため)
+  const { data: pref1 } = await sb
     .from("preferences")
     .select("*, slots(facility_name, department_name)")
     .eq("student_id", student.id)
     .eq("round_id", round.id)
-    .eq("attempt", attempt)
+    .eq("attempt", 1)
     .maybeSingle();
-  myPref = pref;
 
   let statusNotice = "";
-  if (round.phase === "closed") {
-    statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
-  } else if (round.phase === "first_choice" && firstEnded) {
-    statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
-  } else if (round.phase === "second_match" && secondEnded) {
-    statusNotice = `<div class="notice info">2次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
-  } else if (attempt === 1) {
-    if (!myPref || myPref.status === "submitted") {
-      canEdit = true;
-      if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
-    } else if (myPref.status === "confirmed") {
-      statusNotice = `<div class="notice confirmed">今回の希望は確定しました。次のラウンドをお待ちください。</div>`;
-    } else if (myPref.status === "lost") {
-      statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
-    }
+
+  if (pref1 && pref1.status === "confirmed") {
+    // 1次希望で当選・確定済み
+    myPref = pref1;
+    attempt = 1;
+    canEdit = false;
+    statusNotice = `<div class="notice success">🎉 おめでとうございます！${window.COURSE_LABELS[pref1.course_number-1]}「${esc(pref1.slots.facility_name)} ${esc(pref1.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
   } else {
-    if (!myPref) {
-      canEdit = true;
-      statusNotice = `<div class="notice warn">抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
-    } else if (myPref.status === "submitted") {
-      canEdit = true;
-      statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
-    } else if (myPref.status === "confirmed") {
-      statusNotice = `<div class="notice confirmed">2次希望が確定しました。次のラウンドをお待ちください。</div>`;
+    attempt = round.phase === "second_match" ? 2 : 1;
+    if (attempt === 2) {
+      const { data: pref2 } = await sb
+        .from("preferences")
+        .select("*, slots(facility_name, department_name)")
+        .eq("student_id", student.id)
+        .eq("round_id", round.id)
+        .eq("attempt", 2)
+        .maybeSingle();
+      myPref = pref2;
     } else {
-      statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
+      myPref = pref1;
+    }
+
+    if (round.phase === "closed") {
+      statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
+    } else if (round.phase === "first_choice" && firstEnded) {
+      statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
+    } else if (round.phase === "second_match" && secondEnded) {
+      statusNotice = `<div class="notice info">2次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
+    } else if (attempt === 1) {
+      if (!myPref || myPref.status === "submitted") {
+        canEdit = true;
+        if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
+      }
+    } else {
+      if (pref1 && pref1.status === "lost") {
+        if (!myPref) {
+          canEdit = true;
+          statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
+        } else if (myPref.status === "submitted") {
+          canEdit = true;
+          statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
+        } else if (myPref.status === "confirmed") {
+          statusNotice = `<div class="notice success">🎉 おめでとうございます！2次希望で「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
+        } else {
+          statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
+        }
+      } else if (!pref1) {
+        // 1次希望を出していなかった場合も2次マッチングに参加可能
+        if (!myPref) {
+          canEdit = true;
+          statusNotice = `<div class="notice info">1次希望の提出がありませんでした。空いている枠から希望を選んでください。</div>`;
+        } else if (myPref.status === "submitted") {
+          canEdit = true;
+          statusNotice = `<div class="notice confirmed">希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
+        } else if (myPref.status === "confirmed") {
+          statusNotice = `<div class="notice success">🎉 おめでとうございます！「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
+        }
+      }
     }
   }
   html += statusNotice;
@@ -305,7 +338,8 @@ function renderLegend(globalRevealed) {
       <div class="legend">
         <span><span class="sw" style="background:#fff2a8;border:1px solid #d8c463;"></span>内科系</span>
         <span><span class="sw" style="background:#b9e6b5;border:1px solid #7fc27a;"></span>外科系</span>
-        <span><span class="sw" style="background:#fceccb;border:2px solid #d99a3a;"></span>定員超過中(それでも選択可)</span>
+        <span><span class="sw" style="background:#fceccb;border:2px solid #d99a3a;"></span>ちょうど定員(あと1人で超過)</span>
+        <span><span class="sw" style="background:#fbeceb;border:2px solid #b3413a;"></span>定員超過中(それでも選択可)</span>
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
         <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
       </div>
@@ -384,7 +418,11 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   // すでに確定済みのクール列は参考表示のみ
   if (filledCourses.has(courseNumber)) {
-    const namesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("、 ");
+    const namesHtml = confirmedHere.map(a =>
+      a.students.attendance_number === student.attendance_number
+        ? `<span class="me-confirmed">✔ ${esc(a.students.name)}(あなた)</span>`
+        : `<b>${esc(a.students.name)}</b>`
+    ).join("、 ");
     return `<td class="cell-slot cell-other-term">
       <div class="cell-cap">${confirmedHere.length}/${cap}</div>
       ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
@@ -395,11 +433,14 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     (myPref.status === "submitted" || myPref.status === "lottery"));
   const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.course_number === courseNumber && p.status !== "confirmed");
   const totalCount = confirmedHere.length + pendingHere.length;
-  const overCapacity = totalCount >= cap;
+  const isExactFull = totalCount === cap;
+  const isOverFull = totalCount > cap;
 
   const facilityLimit = limitMap[slot.facility_name];
   const facKey = slot.facility_name + "_" + courseNumber;
-  const facilityOver = facilityLimit && (facilityCourseCount[facKey] || 0) >= facilityLimit.max_total;
+  const facCount = facilityCourseCount[facKey] || 0;
+  const facilityExact = facilityLimit && facCount === facilityLimit.max_total;
+  const facilityOver = facilityLimit && facCount > facilityLimit.max_total;
 
   const lodging = requiresLodging(slot);
 
@@ -438,7 +479,8 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   let cls = "cell-slot";
   if (isMine) cls += " cell-mine";
-  else if ((overCapacity || facilityOver) && eligible) cls += " cell-open cell-overbook";
+  else if ((isOverFull || facilityOver) && eligible) cls += " cell-open cell-overflow";
+  else if ((isExactFull || facilityExact) && eligible) cls += " cell-open cell-overbook";
   else if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
@@ -446,7 +488,8 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     ? `data-slot="${slot.id}" data-course="${courseNumber}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}"`
     : "";
 
-  const overNote = (overCapacity || facilityOver) ? `<div class="cell-names" style="color:#b3413a;">定員超過中</div>` : "";
+  let overNote = "";
+  if (isOverFull || facilityOver) overNote = `<div class="cell-names" style="color:#b3413a;">定員超過中</div>`;
 
   return `<td class="${cls}" ${dataAttrs}>
     <div class="cell-cap">${totalCount}/${cap}</div>
