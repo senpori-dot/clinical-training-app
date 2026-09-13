@@ -435,6 +435,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const totalCount = confirmedHere.length + pendingHere.length;
   const isExactFull = totalCount === cap;
   const isOverFull = totalCount > cap;
+  const confirmedFull = confirmedHere.length >= cap; // 確定人数だけで定員に達した＝もう空きなし
 
   const facilityLimit = limitMap[slot.facility_name];
   const facKey = slot.facility_name + "_" + courseNumber;
@@ -444,12 +445,12 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const lodging = requiresLodging(slot);
 
-  let namesHtml = "";
+  // 確定者は匿名期間中でも常に名前を表示する（決着済みのため）
+  const confirmedNamesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("、 ");
+
+  let pendingNamesHtml = "";
   if (globalRevealed) {
-    namesHtml = [
-      ...confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`),
-      ...pendingHere.map(p => `${esc(p.students.name)}`),
-    ].join("、 ");
+    pendingNamesHtml = pendingHere.map(p => `${esc(p.students.name)}`).join("、 ");
   } else {
     const shown = [];
     let hiddenCount = 0;
@@ -458,8 +459,19 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
       else if (p.reveal_self || lodging) shown.push(esc(p.students.name));
       else hiddenCount++;
     }
-    if (hiddenCount > 0) shown.push(`他${hiddenCount}名`);
-    namesHtml = shown.join(" + ");
+    if (hiddenCount > 0) shown.push(`${hiddenCount}名希望中`);
+    pendingNamesHtml = shown.join(" + ");
+  }
+
+  const namesHtml = [confirmedNamesHtml, pendingNamesHtml].filter(Boolean).join("、 ");
+
+  // 確定人数だけで満員 → 競争の余地なし。以後は選択不可（自分がすでに希望中の場合を除く表示上の配慮はしない）
+  if (confirmedFull) {
+    return `<td class="cell-slot cell-full">
+      <div class="cell-cap">${totalCount}/${cap}</div>
+      <div class="cell-names">満員(確定)</div>
+      ${confirmedNamesHtml ? `<div class="cell-names">${confirmedNamesHtml}</div>` : ""}
+    </td>`;
   }
 
   let eligible = canEdit && (
@@ -478,11 +490,13 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
 
   let cls = "cell-slot";
-  if (isMine) cls += " cell-mine";
-  else if ((isOverFull || facilityOver) && eligible) cls += " cell-open cell-overflow";
-  else if ((isExactFull || facilityExact) && eligible) cls += " cell-open cell-overbook";
-  else if (eligible) cls += " cell-open";
+  if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
+
+  if (isOverFull || facilityOver) cls += " cell-overflow";
+  else if (isExactFull || facilityExact) cls += " cell-overbook";
+
+  if (isMine) cls += " cell-mine";
 
   const dataAttrs = eligible
     ? `data-slot="${slot.id}" data-course="${courseNumber}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}"`
