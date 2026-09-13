@@ -204,6 +204,7 @@ td.col-active { box-shadow: inset 0 0 0 2px #2e7d6b; }
 
 .facility-tap { cursor: pointer; }
 .facility-name { text-decoration: underline dotted; }
+.facility-limit-badge { font-size: 0.58rem; color: #b3413a; font-weight: 700; margin-top: 2px; white-space: normal; }
 
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.45);

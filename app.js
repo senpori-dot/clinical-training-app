@@ -313,7 +313,10 @@ async function renderApp(student, round, assignments) {
     .select("slot_id, course_number, students(attendance_number, name)");
 
   // 施設全体（同一施設・同一クール内の全診療科合計）の現在人数を集計
+  // ・facilityCourseCount: 確定+希望中の合計（枠の色分け＝オレンジ/赤の判定に使用）
+  // ・facilityConfirmedCount: 確定のみの合計（施設全体が確定人数だけで満員かどうかの判定に使用）
   const facilityCourseCount = {};
+  const facilityConfirmedCount = {};
   for (const s of slots) {
     if (s.institution_type !== "external") continue;
     for (let c = 1; c <= 6; c++) {
@@ -321,6 +324,7 @@ async function renderApp(student, round, assignments) {
       const pendingN = roundPrefs.filter(p => p.slot_id === s.id && p.course_number === c && p.status !== "confirmed").length;
       const key = s.facility_name + "_" + c;
       facilityCourseCount[key] = (facilityCourseCount[key] || 0) + confirmedN + pendingN;
+      facilityConfirmedCount[key] = (facilityConfirmedCount[key] || 0) + confirmedN;
     }
   }
 
@@ -328,8 +332,8 @@ async function renderApp(student, round, assignments) {
   const globalRevealed = !round.reveal_at || now >= new Date(round.reveal_at);
 
   renderLegend(globalRevealed);
-  renderFullGrid("internal", "院内", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, filledCourses);
-  renderFullGrid("external", "院外", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, filledCourses);
+  renderFullGrid("internal", "院内", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
+  renderFullGrid("external", "院外", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
 }
 
 function renderLegend(globalRevealed) {
@@ -350,7 +354,7 @@ function renderLegend(globalRevealed) {
   `);
 }
 
-function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, filledCourses) {
+function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses) {
   const list = slots
     .filter(s => s.institution_type === institutionType)
     .sort((a, b) => a.sort_order - b.sort_order);
@@ -360,10 +364,11 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
   let rows = "";
   for (const s of list) {
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
-    const hasLimit = !!limitMap[s.facility_name];
-    rows += `<tr class="${rowClass}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}${hasLimit ? ' 🛈' : ''}</b><br/>${esc(s.department_name)}</td>`;
+    const limit = limitMap[s.facility_name];
+    const limitBadge = limit ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで</div>` : "";
+    rows += `<tr class="${rowClass}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}</td>`;
     for (let c = 1; c <= 6; c++) {
-      rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, filledCourses);
+      rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
     }
     rows += `</tr>`;
   }
@@ -403,7 +408,7 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
   });
 }
 
-function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, filledCourses) {
+function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses) {
   const cap = slot["cap_" + courseNumber];
   const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
 
@@ -442,6 +447,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const facCount = facilityCourseCount[facKey] || 0;
   const facilityExact = facilityLimit && facCount === facilityLimit.max_total;
   const facilityOver = facilityLimit && facCount > facilityLimit.max_total;
+  const facilityConfirmedFull = facilityLimit && (facilityConfirmedCount[facKey] || 0) >= facilityLimit.max_total;
 
   const lodging = requiresLodging(slot);
 
@@ -465,11 +471,12 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const namesHtml = [confirmedNamesHtml, pendingNamesHtml].filter(Boolean).join("、 ");
 
-  // 確定人数だけで満員 → 競争の余地なし。以後は選択不可（自分がすでに希望中の場合を除く表示上の配慮はしない）
-  if (confirmedFull) {
+  // 確定人数だけで満員（自分の科、または施設全体のどちらか）→ 競争の余地なし。以後は選択不可
+  if (confirmedFull || facilityConfirmedFull) {
+    const label = confirmedFull ? "満員(確定)" : "施設全体満員(確定)";
     return `<td class="cell-slot cell-full">
       <div class="cell-cap">${totalCount}/${cap}</div>
-      <div class="cell-names">満員(確定)</div>
+      <div class="cell-names">${label}</div>
       ${confirmedNamesHtml ? `<div class="cell-names">${confirmedNamesHtml}</div>` : ""}
     </td>`;
   }
