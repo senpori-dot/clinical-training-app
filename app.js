@@ -297,7 +297,7 @@ async function renderApp(student, round, assignments) {
 
   let countdownTarget = null, countdownLabel = "";
   if (!noRound && notStarted0) { countdownTarget = round.start_at; countdownLabel = "開始まで"; }
-  else if (round.phase === "first_choice" && !firstEnded0 && round.end_at) { countdownTarget = round.end_at; countdownLabel = "1次締切まで"; }
+  else if (!noRound && round.phase === "first_choice" && !firstEnded0 && round.end_at) { countdownTarget = round.end_at; countdownLabel = "1次締切まで"; }
   else if (!noRound && round.phase === "second_match" && !secondEnded0 && round.second_deadline) { countdownTarget = round.second_deadline; countdownLabel = "2次締切まで"; }
 
   if (!noRound) {
