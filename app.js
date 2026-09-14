@@ -69,6 +69,7 @@ function maybeShowResultReveal(prefId, kind, detailText) {
     win: { bg: "linear-gradient(135deg,#fff8e1,#ffe9b3)", emoji: "🎉", title: "当選しました！", color: "#a86a00", confetti: true },
     smooth: { bg: "#eaf6f0", emoji: "✅", title: "確定しました", color: "#1e6b3a", confetti: false },
     lose: { bg: "#f3f3f3", emoji: "😢", title: "抽選に外れました", color: "#6b7680", confetti: false },
+    alldone: { bg: "linear-gradient(135deg,#e3f3ff,#d3e8ff)", emoji: "🏁", title: "お疲れ様でした！", color: "#1c3a5e", confetti: true },
   };
   const cfg = configs[kind] || configs.smooth;
 
@@ -257,6 +258,7 @@ async function renderApp(student, round, assignments) {
   if (allDone) {
     html += `<div class="notice confirmed">すべてのクールが確定しました。お疲れ様でした。</div>`;
     appEl.innerHTML = html;
+    maybeShowResultReveal("all-done-" + student.id, "alldone", "6クールすべての実習先が決まりました。お疲れ様でした！");
     return;
   }
 
@@ -488,7 +490,10 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
     const s = row.slot;
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
     const limit = limitMap[s.facility_name];
-    const limitBadge = limit ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで</div>` : "";
+    const isNanwakayama = s.facility_name.includes("南和歌山医療");
+    const limitBadge = limit
+      ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで${isNanwakayama ? '(6名時、男女3:3は自動回避)' : ''}</div>`
+      : "";
     const isKuroshioRow = s.department_name.includes("黒潮医療人養成プロジェクト") || s.facility_name.includes("黒潮医療人養成プロジェクト");
     const lodgingBadge = (!isKuroshioRow && requiresLodging(s)) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
     rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}</td>`;
@@ -617,11 +622,13 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
-  // 枠(ボーダー)の色は定員に対する希望者数の状況を独立して常に示す：
+  // 枠(ボーダー)の色は定員に対する希望者数の状況を独立して常に示す（誰も希望していない場合は無色）：
   // 空きあり=青、ちょうど定員=オレンジ、超過=赤
-  if (isOverFull || facilityOver) cls += " frame-over";
-  else if (isExactFull || facilityExact) cls += " frame-exact";
-  else cls += " frame-under";
+  if (totalCount > 0) {
+    if (isOverFull || facilityOver) cls += " frame-over";
+    else if (isExactFull || facilityExact) cls += " frame-exact";
+    else cls += " frame-under";
+  }
 
   // 背景は基本そのままの科目色。自分が選んだものだけ紫背景にする
   if (isMine) cls += " cell-mine";
