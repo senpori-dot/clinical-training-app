@@ -83,6 +83,9 @@ header.top .sub {
 .combo-box .combo-num { font-size: 1.3rem; font-weight: 700; color: var(--navy); }
 .combo-box .combo-label { font-size: 0.68rem; color: var(--muted); }
 
+.panel-heading { font-size: 0.8rem; color: var(--muted); display: block; }
+.panel-divider { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+
 table.slots {
   width: 100%;
   border-collapse: collapse;

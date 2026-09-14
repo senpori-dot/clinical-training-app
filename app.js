@@ -212,13 +212,17 @@ async function renderApp(student, round, assignments) {
   let html = "";
 
   // ステータスパネル：6マスを埋める進捗として表示
+  const hasExemptAbroad = assignments.some(a => a.count_exempt);
   html += `<div class="card">
-    <div class="status-grid">
+    <b class="panel-heading">院内・院外・内科系・外科系（3:3カウント）</b>
+    <div class="status-grid" style="margin-top:8px;">
       <div class="status-box ${instCounts.internal>=3?'full':''}"><div class="num">${instCounts.internal}/3</div><div class="label">院内</div></div>
       <div class="status-box ${instCounts.external>=3?'full':''}"><div class="num">${instCounts.external}/3</div><div class="label">院外</div></div>
       <div class="status-box ${catCounts.internal_medicine>=3?'full':''}"><div class="num">${catCounts.internal_medicine}/3</div><div class="label">内科系</div></div>
       <div class="status-box ${catCounts.surgery>=3?'full':''}"><div class="num">${catCounts.surgery}/3</div><div class="label">外科系</div></div>
     </div>
+    <hr class="panel-divider" />
+    <b class="panel-heading">最低1回は必ず行く組み合わせ（例：院内・内科系）</b>
     <div class="combo-status" style="margin-top:8px;">
       ${["IN_N", "IN_G", "EX_N", "EX_G"].map(k => `
         <div class="combo-box ${counts[k] > 0 ? 'done' : ''}">
@@ -228,6 +232,7 @@ async function renderApp(student, round, assignments) {
       `).join("")}
     </div>
     <div class="small-muted" style="margin-top:8px;">確定クール: ${filledCourses.size} / 6　（院内内科・院内外科・院外内科・院外外科を最低1回ずつ、残り2回は「院内内科+院外外科」または「院外内科+院内外科」のどちらかの組み合わせで埋まります）</div>
+    ${hasExemptAbroad ? `<div class="notice info" style="margin-top:10px;">留学(内科系/外科系の区分なし)の分は「院外」としてのみカウントされ、内科系/外科系にはカウントされていません。そのため、残りは院内内科・院内外科のどちらでも大丈夫です。</div>` : ""}
   </div>`;
 
   if (assignments.length > 0) {
@@ -472,7 +477,8 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
     const limit = limitMap[s.facility_name];
     const limitBadge = limit ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで</div>` : "";
-    const lodgingBadge = requiresLodging(s) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
+    const isKuroshioRow = s.department_name.includes("黒潮医療人養成プロジェクト") || s.facility_name.includes("黒潮医療人養成プロジェクト");
+    const lodgingBadge = (!isKuroshioRow && requiresLodging(s)) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
     rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}</td>`;
     for (let c = 1; c <= 6; c++) {
       rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
