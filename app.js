@@ -75,6 +75,11 @@ function renderResultAnimation(kind) {
       <div class="result-fx-text">😢 1次マッチングに外れました。2次マッチングに進んでください！</div>
     </div>`;
   }
+  if (kind === "lose-final") {
+    return `<div class="result-fx result-lose">
+      <div class="result-fx-text">📣 2次マッチングも外れました。希望があれば坂本まで至急ご連絡を。</div>
+    </div>`;
+  }
   return "";
 }
 
@@ -91,6 +96,7 @@ function maybeShowResultReveal(prefId, kind, detailText) {
     win: { bg: "linear-gradient(135deg,#fff8e1,#ffe9b3)", emoji: "🎉", title: "当選しました！", color: "#a86a00", confetti: true },
     smooth: { bg: "#eaf6f0", emoji: "✅", title: "確定しました", color: "#1e6b3a", confetti: false },
     lose: { bg: "#f3f3f3", emoji: "😢", title: "1次マッチングに外れました", color: "#6b7680", confetti: false },
+    "lose-final": { bg: "#fdf1ec", emoji: "📣", title: "2次マッチングも外れてしまいました", color: "#b3413a", confetti: false },
     alldone: { bg: "linear-gradient(135deg,#e3f3ff,#d3e8ff)", emoji: "🏁", title: "お疲れ様でした！", color: "#1c3a5e", confetti: true },
   };
   const cfg = configs[kind] || configs.smooth;
@@ -393,10 +399,11 @@ async function renderApp(student, round, assignments) {
         resultPrefId = myPref.id;
         resultDetailText = `${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}`;
       } else {
-        statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
-        resultAnimation = "lose";
+        const finalMsg = "2次希望も抽選に外れました。もし希望する枠があれば、すぐに坂本まで希望の枠をご連絡ください。次のラウンドが始まる前であれば受け付けます。それ以降になった場合は、全クールが確定した後、余っている枠の中から改めて希望を聞きます。";
+        statusNotice = `<div class="notice warn">${finalMsg}</div>`;
+        resultAnimation = "lose-final";
         resultPrefId = myPref.id;
-        resultDetailText = "2次希望も埋まってしまいました。事務局にご相談ください。";
+        resultDetailText = finalMsg;
       }
     }
   }
