@@ -146,7 +146,7 @@ async function main() {
 
   const { data: assignments } = await sb
     .from("assignments")
-    .select("course_number, slot_id, slots(institution_type, category, facility_name, department_name)")
+    .select("course_number, slot_id, count_exempt, slots(institution_type, category, facility_name, department_name)")
     .eq("student_id", student.id);
 
   renderApp(student, round, assignments || []);
@@ -154,16 +154,25 @@ async function main() {
 
 function computeState(assignments) {
   const counts = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+  const instCounts = { internal: 0, external: 0 };
+  const catCounts = { internal_medicine: 0, surgery: 0 };
   const filledCourses = new Set();
   for (const a of assignments) {
     filledCourses.add(a.course_number);
-    counts[comboKeyOf(a.slots)]++;
+    if (a.count_exempt) {
+      // 留学等で「内科/外科どちらでもない」扱いの枠：院内/院外のカウントのみ増やし、内科/外科・4組み合わせの判定には含めない
+      instCounts[a.slots.institution_type]++;
+    } else {
+      counts[comboKeyOf(a.slots)]++;
+      instCounts[a.slots.institution_type]++;
+      catCounts[a.slots.category]++;
+    }
   }
-  return { counts, filledCourses };
+  return { counts, instCounts, catCounts, filledCourses };
 }
 
 async function renderApp(student, round, assignments) {
-  const { counts, filledCourses } = computeState(assignments);
+  const { counts, instCounts, catCounts, filledCourses } = computeState(assignments);
   const allDone = filledCourses.size >= 6;
   const feasible = feasiblePatterns(counts);
 
@@ -171,7 +180,13 @@ async function renderApp(student, round, assignments) {
 
   // ステータスパネル：6マスを埋める進捗として表示
   html += `<div class="card">
-    <div class="combo-status">
+    <div class="status-grid">
+      <div class="status-box ${instCounts.internal>=3?'full':''}"><div class="num">${instCounts.internal}/3</div><div class="label">院内</div></div>
+      <div class="status-box ${instCounts.external>=3?'full':''}"><div class="num">${instCounts.external}/3</div><div class="label">院外</div></div>
+      <div class="status-box ${catCounts.internal_medicine>=3?'full':''}"><div class="num">${catCounts.internal_medicine}/3</div><div class="label">内科系</div></div>
+      <div class="status-box ${catCounts.surgery>=3?'full':''}"><div class="num">${catCounts.surgery}/3</div><div class="label">外科系</div></div>
+    </div>
+    <div class="combo-status" style="margin-top:8px;">
       ${["IN_N", "IN_G", "EX_N", "EX_G"].map(k => `
         <div class="combo-box ${counts[k] > 0 ? 'done' : ''}">
           <div class="combo-num">${counts[k]}</div>
@@ -409,7 +424,8 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
     const limit = limitMap[s.facility_name];
     const limitBadge = limit ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで</div>` : "";
-    rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}</td>`;
+    const lodgingBadge = requiresLodging(s) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
+    rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}</td>`;
     for (let c = 1; c <= 6; c++) {
       rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
     }
