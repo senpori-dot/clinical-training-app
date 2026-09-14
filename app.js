@@ -320,12 +320,14 @@ async function renderApp(student, round, assignments) {
   let myPref = null;
   let attempt = round.phase === "second_match" ? 2 : 1;
 
-  if (notStarted) {
-    html += `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください。</div>`;
-    appEl.innerHTML = html;
-    return;
-  }
+  let statusNotice = "";
+  let resultAnimation = "";
+  let resultPrefId = null;
+  let resultDetailText = "";
 
+  if (notStarted) {
+    statusNotice = `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください（下の表は閲覧のみ、選択はまだできません）。</div>`;
+  } else {
   const { data: pref1 } = await sb
     .from("preferences")
     .select("*, slots(facility_name, department_name, facility_accommodation, accommodation)")
@@ -333,11 +335,6 @@ async function renderApp(student, round, assignments) {
     .eq("round_id", round.id)
     .eq("attempt", 1)
     .maybeSingle();
-
-  let statusNotice = "";
-  let resultAnimation = "";
-  let resultPrefId = null;
-  let resultDetailText = "";
 
   if (pref1 && pref1.status === "confirmed") {
     // 1次希望で当選・確定済み（ラウンド全体が2次マッチングに進んでいても、この学生自身は1次で決着済み）
@@ -402,13 +399,14 @@ async function renderApp(student, round, assignments) {
       }
     }
   }
+  }
   html += statusNotice;
 
   if (resultAnimation) {
     html += renderResultAnimation(resultAnimation);
   }
 
-  if (feasible.length === 1) {
+  if (!notStarted && feasible.length === 1) {
     const a = feasible[0];
     const target = { IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a };
     const remainMsg = ["IN_N","IN_G","EX_N","EX_G"]
