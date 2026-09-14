@@ -209,6 +209,51 @@ async function renderMatchingTab() {
 
   const groupList = Object.values(groups).sort((a,b)=>a.courseNumber-b.courseNumber);
 
+  // ===== 全体表（①〜⑥クール × 全実習先、匿名関係なく全員の名前が見える） =====
+  const { data: allSlots } = await sb.from("slots").select("*").eq("active", true);
+  const { data: allAssignments } = await sb
+    .from("assignments")
+    .select("slot_id, course_number, students(attendance_number, name)");
+
+  function buildGrid(institutionType, label) {
+    const list = (allSlots || [])
+      .filter(s => s.institution_type === institutionType)
+      .sort((a,b) => a.sort_order - b.sort_order);
+    if (list.length === 0) return "";
+
+    let rows = "";
+    let prevFacility = null;
+    for (const s of list) {
+      const facilityChanged = institutionType === "external" && s.facility_name !== prevFacility;
+      prevFacility = s.facility_name;
+      const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
+      rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>`;
+      for (let c = 1; c <= 6; c++) {
+        const cap = s["cap_" + c];
+        if (cap <= 0) { rows += `<td class="cell-slot cell-blocked">×</td>`; continue; }
+        const confirmedHere = (allAssignments || []).filter(a => a.slot_id === s.id && a.course_number === c);
+        const pendingHere = (prefs || []).filter(p => p.slot_id === s.id && p.course_number === c && p.status !== "confirmed");
+        const total = confirmedHere.length + pendingHere.length;
+        const names = [
+          ...confirmedHere.map(a => `<b>${a.students.attendance_number} ${esc(a.students.name)}</b>`),
+          ...pendingHere.map(p => `${p.students.attendance_number} ${esc(p.students.name)}(${p.status})`),
+        ].join("<br>");
+        const overflowClass = total > cap ? "frame-over" : (total === cap ? "frame-exact" : "");
+        rows += `<td class="cell-slot ${overflowClass}"><div class="cell-cap">${total}/${cap}</div>${names ? `<div class="cell-names">${names}</div>` : ""}</td>`;
+      }
+      rows += `</tr>`;
+    }
+    const header = `<tr><th class="dept-col">実習先/診療科</th>${window.COURSE_LABELS.map(l=>`<th>${l}</th>`).join("")}</tr>`;
+    return `<div class="card">
+      <b>${label}の全体表（管理者用・氏名は常に表示）</b>
+      <div class="grid-scroll" style="margin-top:8px;">
+        <table class="pref-grid"><thead>${header}</thead><tbody>${rows}</tbody></table>
+      </div>
+    </div>`;
+  }
+
+  const gridHtml = buildGrid("internal", "院内") + buildGrid("external", "院外");
+
   let rows = groupList.map(g => {
     const overflow = g.items.length > g.cap;
     const names = g.items.map(i => `${i.students.attendance_number} ${esc(i.students.name)}${i.status!=='submitted' ? `(${i.status})` : ''}`).join("、 ");
@@ -221,6 +266,7 @@ async function renderMatchingTab() {
   }).join("");
 
   document.getElementById("tab-content").innerHTML = `
+    ${gridHtml}
     <div class="card">
       <div class="flex-between">
         <b>第${round.round_number}希望（${attempt===2?'2次マッチング':'1次'}）の集計</b>
