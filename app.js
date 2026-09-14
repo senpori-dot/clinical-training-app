@@ -46,6 +46,39 @@ function renderResultAnimation(kind) {
   return "";
 }
 
+// 締切後にページを開いた瞬間、結果が一目で分かる全画面の演出（同じ結果は1回だけ表示）
+function maybeShowResultReveal(prefId, kind, detailText) {
+  if (!prefId || !kind) return;
+  const seenKey = "result_seen_" + prefId + "_" + kind;
+  if (localStorage.getItem(seenKey)) return;
+  localStorage.setItem(seenKey, "1");
+
+  ensureModalRoot();
+  const root = document.getElementById("facility-modal-root");
+  const configs = {
+    win: { bg: "linear-gradient(135deg,#fff8e1,#ffe9b3)", emoji: "🎉", title: "当選しました！", color: "#a86a00", confetti: true },
+    smooth: { bg: "#eaf6f0", emoji: "✅", title: "確定しました", color: "#1e6b3a", confetti: false },
+    lose: { bg: "#f3f3f3", emoji: "😢", title: "抽選に外れました", color: "#6b7680", confetti: false },
+  };
+  const cfg = configs[kind] || configs.smooth;
+
+  root.innerHTML = `
+    <div class="modal-backdrop reveal-backdrop" id="reveal-backdrop">
+      <div class="reveal-box" style="background:${cfg.bg};">
+        ${cfg.confetti ? `<div class="confetti">${"🎉🎊✨🎈🎉🎊".split("").map((c,i)=>`<span style="--i:${i}">${c}</span>`).join("")}</div>` : ""}
+        <div class="reveal-emoji">${cfg.emoji}</div>
+        <div class="reveal-title" style="color:${cfg.color};">${cfg.title}</div>
+        <div class="reveal-detail">${esc(detailText || "")}</div>
+        <button class="secondary" id="reveal-close-btn">閉じる</button>
+      </div>
+    </div>
+  `;
+  document.getElementById("reveal-close-btn").onclick = closeFacilityModal;
+  document.getElementById("reveal-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "reveal-backdrop") closeFacilityModal();
+  });
+}
+
 function comboKeyOf(slot) {
   const inst = slot.institution_type === "internal" ? "IN" : "EX";
   const cat = slot.category === "internal_medicine" ? "N" : "G";
@@ -249,6 +282,8 @@ async function renderApp(student, round, assignments) {
 
   let statusNotice = "";
   let resultAnimation = "";
+  let resultPrefId = null;
+  let resultDetailText = "";
 
   if (pref1 && pref1.status === "confirmed") {
     // 1次希望で当選・確定済み（ラウンド全体が2次マッチングに進んでいても、この学生自身は1次で決着済み）
@@ -258,6 +293,8 @@ async function renderApp(student, round, assignments) {
     const wonLottery = pref1.won_lottery === true;
     statusNotice = `<div class="notice success">🎉 おめでとうございます！${window.COURSE_LABELS[pref1.course_number-1]}「${esc(pref1.slots.facility_name)} ${esc(pref1.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
     resultAnimation = wonLottery ? "win" : "smooth";
+    resultPrefId = pref1.id;
+    resultDetailText = `${window.COURSE_LABELS[pref1.course_number-1]} ${pref1.slots.facility_name} ${pref1.slots.department_name}`;
   } else {
     attempt = round.phase === "second_match" ? 2 : 1;
     const { data: pref2 } = attempt === 2 ? await sb
@@ -282,10 +319,14 @@ async function renderApp(student, round, assignments) {
       } else if (myPref.status === "lost") {
         statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
         resultAnimation = "lose";
+        resultPrefId = myPref.id;
+        resultDetailText = "第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。";
       }
     } else {
       if (pref1 && pref1.status === "lost" && resultAnimation === "") {
         resultAnimation = "lose-once";
+        resultPrefId = pref1.id;
+        resultDetailText = "第一希望は抽選に外れました。2次希望へ進んでください。";
       }
       if (!myPref) {
         canEdit = true;
@@ -297,9 +338,13 @@ async function renderApp(student, round, assignments) {
         const wonLottery = myPref.won_lottery === true;
         statusNotice = `<div class="notice success">🎉 おめでとうございます！2次希望で「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
         resultAnimation = wonLottery ? "win" : "smooth";
+        resultPrefId = myPref.id;
+        resultDetailText = `${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}`;
       } else {
         statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
         resultAnimation = "lose";
+        resultPrefId = myPref.id;
+        resultDetailText = "2次希望も埋まってしまいました。事務局にご相談ください。";
       }
     }
   }
@@ -321,6 +366,9 @@ async function renderApp(student, round, assignments) {
   }
 
   appEl.innerHTML = html;
+  if (resultAnimation) {
+    maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
+  }
 
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
   const { data: facilityLimits } = await sb.from("facility_limits").select("*");

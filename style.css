@@ -179,6 +179,23 @@ button:disabled { background: #b9c0bc; cursor: not-allowed; }
   80% { transform: translateX(3px); }
 }
 
+/* 結果発表フルスクリーン演出 */
+.reveal-backdrop { align-items: center; }
+.reveal-box {
+  position: relative;
+  width: 90%; max-width: 420px;
+  border-radius: 20px;
+  padding: 36px 24px 28px;
+  text-align: center;
+  overflow: hidden;
+  animation: fx-pop 0.35s ease-out;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+}
+.reveal-emoji { font-size: 3.2rem; margin-bottom: 6px; }
+.reveal-title { font-size: 1.4rem; font-weight: 800; margin-bottom: 10px; }
+.reveal-detail { font-size: 0.9rem; color: var(--text); margin-bottom: 20px; white-space: pre-line; }
+.reveal-box button#reveal-close-btn { background: var(--navy); color: white; padding: 10px 28px; }
+
 .note-text {
   font-size: 0.78rem;
   color: var(--muted);
