@@ -284,41 +284,42 @@ async function renderApp(student, round, assignments) {
     return;
   }
 
-  if (!round) {
-    html += `<div class="notice info">現在、募集中のラウンドはありません。事務局からの案内をお待ちください。</div>`;
-    appEl.innerHTML = html;
-    return;
+  const now = new Date();
+  const noRound = !round;
+
+  if (noRound) {
+    html += `<div class="notice info">現在、募集中のラウンドはありません。事務局からの案内をお待ちください（下の表は閲覧のみです）。</div>`;
   }
 
-  const now = new Date();
-
-  const notStarted0 = round.start_at && now < new Date(round.start_at);
-  const firstEnded0 = round.end_at && now > new Date(round.end_at);
-  const secondEnded0 = round.second_deadline && now > new Date(round.second_deadline);
+  const notStarted0 = !noRound && round.start_at && now < new Date(round.start_at);
+  const firstEnded0 = !noRound && round.end_at && now > new Date(round.end_at);
+  const secondEnded0 = !noRound && round.second_deadline && now > new Date(round.second_deadline);
 
   let countdownTarget = null, countdownLabel = "";
-  if (notStarted0) { countdownTarget = round.start_at; countdownLabel = "開始まで"; }
+  if (!noRound && notStarted0) { countdownTarget = round.start_at; countdownLabel = "開始まで"; }
   else if (round.phase === "first_choice" && !firstEnded0 && round.end_at) { countdownTarget = round.end_at; countdownLabel = "1次締切まで"; }
-  else if (round.phase === "second_match" && !secondEnded0 && round.second_deadline) { countdownTarget = round.second_deadline; countdownLabel = "2次締切まで"; }
+  else if (!noRound && round.phase === "second_match" && !secondEnded0 && round.second_deadline) { countdownTarget = round.second_deadline; countdownLabel = "2次締切まで"; }
 
-  html += `<div class="card"><b>現在のラウンド：第${round.round_number}希望</b>`;
-  if (round.start_at) html += `<div class="small-muted">開始: ${fmtDate(round.start_at)}</div>`;
-  if (round.end_at) html += `<div class="small-muted">1次締切: ${fmtDate(round.end_at)}</div>`;
-  if (round.second_deadline) html += `<div class="small-muted">2次締切: ${fmtDate(round.second_deadline)}</div>`;
-  if (countdownTarget) {
-    html += `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>`;
-  } else if (!notStarted0 && (round.phase === "closed" || (round.phase === "second_match" && secondEnded0) || (round.phase === "first_choice" && firstEnded0))) {
-    html += `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>`;
+  if (!noRound) {
+    html += `<div class="card"><b>現在のラウンド：第${round.round_number}希望</b>`;
+    if (round.start_at) html += `<div class="small-muted">開始: ${fmtDate(round.start_at)}</div>`;
+    if (round.end_at) html += `<div class="small-muted">1次締切: ${fmtDate(round.end_at)}</div>`;
+    if (round.second_deadline) html += `<div class="small-muted">2次締切: ${fmtDate(round.second_deadline)}</div>`;
+    if (countdownTarget) {
+      html += `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>`;
+    } else if (!notStarted0 && (round.phase === "closed" || (round.phase === "second_match" && secondEnded0) || (round.phase === "first_choice" && firstEnded0))) {
+      html += `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>`;
+    }
+    html += `</div>`;
   }
-  html += `</div>`;
 
-  const notStarted = notStarted0;
+  const notStarted = notStarted0 || noRound;
   const firstEnded = firstEnded0;
   const secondEnded = secondEnded0;
 
   let canEdit = false;
   let myPref = null;
-  let attempt = round.phase === "second_match" ? 2 : 1;
+  let attempt = !noRound && round.phase === "second_match" ? 2 : 1;
 
   let statusNotice = "";
   let resultAnimation = "";
@@ -326,7 +327,7 @@ async function renderApp(student, round, assignments) {
   let resultDetailText = "";
 
   if (notStarted) {
-    statusNotice = `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください（下の表は閲覧のみ、選択はまだできません）。</div>`;
+    if (!noRound) statusNotice = `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください（下の表は閲覧のみ、選択はまだできません）。</div>`;
   } else {
   const { data: pref1 } = await sb
     .from("preferences")
@@ -430,7 +431,7 @@ async function renderApp(student, round, assignments) {
   const limitMap = {};
   (facilityLimits || []).forEach(f => { limitMap[f.facility_name] = f; });
 
-  const { data: roundPrefs } = await sb
+  const { data: roundPrefs } = noRound ? { data: [] } : await sb
     .from("preferences")
     .select("slot_id, course_number, status, reveal_self, student_id, students(attendance_number, name)")
     .eq("round_id", round.id)
@@ -454,7 +455,7 @@ async function renderApp(student, round, assignments) {
     }
   }
 
-  const globalRevealed = !round.reveal_at || now >= new Date(round.reveal_at);
+  const globalRevealed = noRound || !round.reveal_at || now >= new Date(round.reveal_at);
 
   renderLegend(globalRevealed);
   renderFullGrid("internal", "院内", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
