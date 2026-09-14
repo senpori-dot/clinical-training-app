@@ -195,6 +195,8 @@ table.pref-grid tbody tr.row-naika td.dept-col { background: #fff2a8; }
 table.pref-grid tbody tr.row-geka td.dept-col { background: #b9e6b5; }
 table.pref-grid tbody tr.row-naika { background: #fffbe0; }
 table.pref-grid tbody tr.row-geka { background: #e4f6e2; }
+table.pref-grid tbody tr.row-abroad td.dept-col { background: #dbe6f0; }
+table.pref-grid tbody tr.row-abroad { background: #eaf1f7; }
 
 td.cell-slot { min-width: 54px; cursor: default; }
 td.cell-blocked { background: repeating-linear-gradient(135deg, #dcdcdc, #dcdcdc 4px, #ececec 4px, #ececec 8px); color: #999; }

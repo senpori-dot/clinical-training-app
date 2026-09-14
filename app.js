@@ -309,19 +309,54 @@ function renderLegend(globalRevealed) {
   `);
 }
 
+function isStudyAbroadFacility(facilityName) {
+  return facilityName.startsWith("留学(") || facilityName.startsWith("留学（");
+}
+
 function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses) {
-  const list = slots
+  const rawList = slots
     .filter(s => s.institution_type === institutionType)
     .sort((a, b) => a.sort_order - b.sort_order);
 
-  if (list.length === 0) return;
+  if (rawList.length === 0) return;
+
+  // 留学枠は大学ごとに1行へ統合（内科/外科の区別を表示上つけない）
+  const displayRows = [];
+  const abroadIndex = {};
+  for (const s of rawList) {
+    if (isStudyAbroadFacility(s.facility_name)) {
+      if (abroadIndex[s.facility_name] === undefined) {
+        abroadIndex[s.facility_name] = displayRows.length;
+        displayRows.push({ facility_name: s.facility_name, department_name: "", isAbroad: true, slotIds: [s.id], category: null, sortOrder: s.sort_order });
+      } else {
+        displayRows[abroadIndex[s.facility_name]].slotIds.push(s.id);
+      }
+    } else {
+      displayRows.push({ facility_name: s.facility_name, department_name: s.department_name, isAbroad: false, slot: s, sortOrder: s.sort_order });
+    }
+  }
+  displayRows.sort((a, b) => a.sortOrder - b.sortOrder);
 
   let rows = "";
   let prevFacility = null;
-  for (const s of list) {
+  for (const row of displayRows) {
+    const facilityChanged = institutionType === "external" && row.facility_name !== prevFacility;
+    prevFacility = row.facility_name;
+
+    if (row.isAbroad) {
+      rows += `<tr class="row-abroad ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col"><b class="facility-name">${esc(row.facility_name)}</b><br/><span class="small-muted">留学（確定済み）</span></td>`;
+      for (let c = 1; c <= 6; c++) {
+        const names = allAssignments
+          .filter(a => row.slotIds.includes(a.slot_id) && a.course_number === c)
+          .map(a => `<b>${esc(a.students.name)}</b>`).join("<br>");
+        rows += `<td class="cell-slot cell-blocked">${names ? `<div class="cell-names">${names}</div>` : ""}</td>`;
+      }
+      rows += `</tr>`;
+      continue;
+    }
+
+    const s = row.slot;
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
-    const facilityChanged = institutionType === "external" && s.facility_name !== prevFacility;
-    prevFacility = s.facility_name;
     const limit = limitMap[s.facility_name];
     const limitBadge = limit ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで</div>` : "";
     rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}</td>`;
@@ -352,7 +387,7 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
   document.querySelectorAll(`td.facility-tap`).forEach(td => {
     td.addEventListener("click", () => {
       const fname = td.dataset.facility;
-      const slot = list.find(s => s.facility_name === fname);
+      const slot = rawList.find(s => s.facility_name === fname);
       if (!slot) return;
       const limit = limitMap[fname];
       openFacilityModal({
