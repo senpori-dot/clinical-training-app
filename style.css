@@ -199,6 +199,19 @@ button:disabled { background: #b9c0bc; cursor: not-allowed; }
 .reveal-detail { font-size: 0.9rem; color: var(--text); margin-bottom: 20px; white-space: pre-line; }
 .reveal-box button#reveal-close-btn { background: var(--navy); color: white; padding: 10px 28px; }
 
+.refresh-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 500;
+  background: var(--navy);
+  color: white;
+  border-radius: 999px;
+  padding: 12px 18px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+  font-weight: 700;
+}
+
 .note-text {
   font-size: 0.78rem;
   color: var(--muted);
@@ -271,7 +284,10 @@ td.cell-open { cursor: pointer; }
 td.cell-open:active { background: #d7ecec; }
 td.cell-overbook { box-shadow: inset 0 0 0 2px #d99a3a; background: #fceccb; }
 td.cell-overflow { box-shadow: inset 0 0 0 2px #b3413a; background: #fbeceb; }
-td.cell-mine { outline: 3px solid #7b4fb8; outline-offset: -3px; font-weight: 700; }
+td.frame-under { box-shadow: inset 0 0 0 2px #2f6fb3; }
+td.frame-exact { box-shadow: inset 0 0 0 2px #d99a3a; }
+td.frame-over { box-shadow: inset 0 0 0 2px #b3413a; }
+td.cell-mine { background: #ede4f7 !important; font-weight: 700; }
 td.cell-ineligible { color: #bbb; }
 td.cell-other-term { color: #8a8f8a; background: #f4f5f3; }
 th.col-active { background: #2e7d6b !important; }

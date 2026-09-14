@@ -26,6 +26,16 @@ function requiresLodging(slot) {
   return acc.includes("○");
 }
 
+function ensureRefreshButton() {
+  if (document.getElementById("refresh-fab")) return;
+  const btn = document.createElement("button");
+  btn.id = "refresh-fab";
+  btn.className = "refresh-fab";
+  btn.textContent = "↻ 更新";
+  btn.onclick = () => location.reload();
+  document.body.appendChild(btn);
+}
+
 function renderResultAnimation(kind) {
   if (kind === "win") {
     return `<div class="result-fx result-win">
@@ -168,6 +178,7 @@ async function main() {
   }
 
   headerEl.textContent = `${student.name}（出席番号 ${student.attendance_number}）`;
+  ensureRefreshButton();
 
   const { data: round0 } = await sb
     .from("rounds")
@@ -222,7 +233,7 @@ async function renderApp(student, round, assignments) {
       <div class="status-box ${catCounts.surgery>=3?'full':''}"><div class="num">${catCounts.surgery}/3</div><div class="label">外科系</div></div>
     </div>
     <hr class="panel-divider" />
-    <b class="panel-heading">最低1回は必ず行く組み合わせ（例：院内・内科系）</b>
+    <b class="panel-heading">最低1回は必ず行く組み合わせ</b>
     <div class="combo-status" style="margin-top:8px;">
       ${["IN_N", "IN_G", "EX_N", "EX_G"].map(k => `
         <div class="combo-box ${counts[k] > 0 ? 'done' : ''}">
@@ -417,12 +428,13 @@ function renderLegend(globalRevealed) {
       <div class="legend">
         <span><span class="sw" style="background:#fff2a8;border:1px solid #d8c463;"></span>内科系</span>
         <span><span class="sw" style="background:#b9e6b5;border:1px solid #7fc27a;"></span>外科系</span>
-        <span><span class="sw" style="background:#fceccb;border:2px solid #d99a3a;"></span>ちょうど定員</span>
-        <span><span class="sw" style="background:#fbeceb;border:2px solid #b3413a;"></span>定員超過中(それでも選択可)</span>
-        <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
-        <span><span class="sw" style="background:#ede4f7;border:2px solid #7b4fb8;"></span>あなたの希望</span>
+        <span><span class="sw" style="background:#fff;border:2px solid #2f6fb3;"></span>枠に空きあり</span>
+        <span><span class="sw" style="background:#fff;border:2px solid #d99a3a;"></span>ちょうど定員</span>
+        <span><span class="sw" style="background:#fff;border:2px solid #b3413a;"></span>定員超過中(それでも選択可)</span>
+        <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/満員(確定)/対象者限定</span>
+        <span><span class="sw" style="background:#ede4f7;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。</p>
+      <p class="small-muted">枠の縁の色は希望者数の状況（青=空きあり、オレンジ=ちょうど定員、赤=超過）を常に表示します。すでに確定人数だけで満員になった枠は、他の未確定枠と区別しやすいようグレー表示にしています。院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。</p>
     </div>
   `);
 }
@@ -591,7 +603,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   if (confirmedFull || facilityConfirmedFull) {
     const label = confirmedFull ? "満員(確定)" : "施設全体満員(確定)";
-    return `<td class="cell-slot cell-full">
+    return `<td class="cell-slot cell-other-term">
       <div class="cell-cap">${totalCount}/${cap}</div>
       <div class="cell-names">${label}</div>
       ${confirmedNamesHtml ? `<div class="cell-names">${confirmedNamesHtml}</div>` : ""}
@@ -605,9 +617,13 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
-  if (isOverFull || facilityOver) cls += " cell-overflow";
-  else if (isExactFull || facilityExact) cls += " cell-overbook";
+  // 枠(ボーダー)の色は定員に対する希望者数の状況を独立して常に示す：
+  // 空きあり=青、ちょうど定員=オレンジ、超過=赤
+  if (isOverFull || facilityOver) cls += " frame-over";
+  else if (isExactFull || facilityExact) cls += " frame-exact";
+  else cls += " frame-under";
 
+  // 背景は基本そのままの科目色。自分が選んだものだけ紫背景にする
   if (isMine) cls += " cell-mine";
 
   const dataAttrs = eligible
