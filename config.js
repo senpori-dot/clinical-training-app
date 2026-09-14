@@ -8,6 +8,7 @@ window.SUPABASE_ANON_KEY = "sb_publishable_ZKWt5eu0krfdANdS4GOKUA_QESn1mzE";
 // (このサンドボックス環境はネットワークアクセスできないため、接続確認はこちらではできません)。
 
 window.COURSE_LABELS = ["①クール", "②クール", "③クール", "④クール", "⑤クール", "⑥クール"];
+window.COURSE_DATES = ["1/25〜2/12", "2/15〜3/5", "3/8〜3/26", "4/12〜4/30", "5/10〜5/28", "5/31〜6/18"];
 window.REQUIRED = {
   internal: 3,   // 院内3クール
   external: 3,   // 院外3クール

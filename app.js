@@ -541,7 +541,7 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
     rows += `</tr>`;
   }
 
-  const header = `<tr><th class="dept-col">実習先 / 診療科</th>${window.COURSE_LABELS.map(l => `<th>${l}</th>`).join("")}</tr>`;
+  const header = `<tr><th class="dept-col">実習先 / 診療科</th>${window.COURSE_LABELS.map((l,i) => `<th>${l}<br/><span class="course-date">${window.COURSE_DATES[i]}</span></th>`).join("")}</tr>`;
 
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">

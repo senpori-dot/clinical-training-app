@@ -279,6 +279,7 @@ table.pref-grid thead th {
   z-index: 2;
 }
 table.pref-grid thead th.dept-col { z-index: 3; }
+.course-date { font-size: 0.6rem; font-weight: 400; opacity: 0.85; }
 table.pref-grid tbody tr.row-naika td.dept-col { background: #fff2a8; }
 table.pref-grid tbody tr.row-geka td.dept-col { background: #b9e6b5; }
 table.pref-grid tbody tr.row-naika { background: #fffbe0; }
