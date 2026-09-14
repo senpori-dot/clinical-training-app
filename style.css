@@ -67,6 +67,22 @@ header.top .sub {
 .status-box .label { font-size: 0.72rem; color: var(--muted); }
 .status-box.full .num { color: var(--accent); }
 
+.combo-status {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.combo-box {
+  text-align: center;
+  background: #f0f2f0;
+  border-radius: 8px;
+  padding: 10px 4px;
+  border: 2px solid transparent;
+}
+.combo-box.done { border-color: var(--accent); background: #e9f5f0; }
+.combo-box .combo-num { font-size: 1.3rem; font-weight: 700; color: var(--navy); }
+.combo-box .combo-label { font-size: 0.68rem; color: var(--muted); }
+
 table.slots {
   width: 100%;
   border-collapse: collapse;
@@ -198,6 +214,8 @@ td.col-active { box-shadow: inset 0 0 0 2px #2e7d6b; }
 .cell-names { font-size: 0.62rem; color: var(--muted); line-height: 1.2; }
 .cell-names b { color: var(--navy); }
 .me-confirmed { color: #1e6b3a; font-weight: 800; background: #d9f0e0; padding: 1px 4px; border-radius: 4px; }
+
+table.pref-grid tbody tr.facility-start td { border-top: 3px solid var(--navy); }
 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 0.75rem; margin: 8px 0; }
 .legend span.sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 4px; vertical-align: -1px; }

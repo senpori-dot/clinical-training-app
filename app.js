@@ -4,6 +4,7 @@ const headerEl = document.getElementById("student-name-header");
 
 const CATEGORY_LABEL = { internal_medicine: "内科系", surgery: "外科系" };
 const INSTITUTION_LABEL = { internal: "院内", external: "院外" };
+const COMBO_LABEL = { IN_N: "院内・内科系", IN_G: "院内・外科系", EX_N: "院外・内科系", EX_G: "院外・外科系" };
 
 function getToken() {
   const params = new URLSearchParams(window.location.search);
@@ -23,6 +24,30 @@ function fmtDate(d) {
 function requiresLodging(slot) {
   const acc = slot.facility_accommodation || slot.accommodation || "";
   return acc.includes("○");
+}
+
+function comboKeyOf(slot) {
+  const inst = slot.institution_type === "internal" ? "IN" : "EX";
+  const cat = slot.category === "internal_medicine" ? "N" : "G";
+  return inst + "_" + cat;
+}
+
+// 4つの組み合わせ(院内内科・院内外科・院外内科・院外外科)は必ず1回以上、
+// 残り2つは「院内内科+院外外科をもう1回ずつ」または「院外内科+院内外科をもう1回ずつ」
+// の2パターンしかない。counts={IN_N,IN_G,EX_N,EX_G} に対し、まだ成立しうる配分(a)を返す。
+function feasiblePatterns(counts) {
+  const patterns = [1, 2]; // a=1→(1,2,2,1), a=2→(2,1,1,2)
+  return patterns.filter(a => {
+    const target = { IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a };
+    return Object.keys(target).every(k => counts[k] <= target[k]);
+  });
+}
+
+function comboEligible(counts, comboKey, feasible) {
+  return feasible.some(a => {
+    const target = { IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a };
+    return counts[comboKey] < target[comboKey];
+  });
 }
 
 // ============================================================
@@ -107,39 +132,34 @@ async function main() {
   renderApp(student, round, assignments || []);
 }
 
-function computeRemaining(assignments) {
-  const counts = { internal: 0, external: 0, internal_medicine: 0, surgery: 0 };
+function computeState(assignments) {
+  const counts = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
   const filledCourses = new Set();
   for (const a of assignments) {
     filledCourses.add(a.course_number);
-    counts[a.slots.institution_type]++;
-    counts[a.slots.category]++;
+    counts[comboKeyOf(a.slots)]++;
   }
-  return {
-    remaining: {
-      internal: window.REQUIRED.internal - counts.internal,
-      external: window.REQUIRED.external - counts.external,
-      internal_medicine: window.REQUIRED.internal_medicine - counts.internal_medicine,
-      surgery: window.REQUIRED.surgery - counts.surgery,
-    },
-    filledCourses,
-  };
+  return { counts, filledCourses };
 }
 
 async function renderApp(student, round, assignments) {
-  const { remaining, filledCourses } = computeRemaining(assignments);
+  const { counts, filledCourses } = computeState(assignments);
   const allDone = filledCourses.size >= 6;
+  const feasible = feasiblePatterns(counts);
 
   let html = "";
 
+  // ステータスパネル：6マスを埋める進捗として表示
   html += `<div class="card">
-    <div class="status-grid">
-      <div class="status-box ${remaining.internal<=0?'full':''}"><div class="num">${remaining.internal}</div><div class="label">院内 残り</div></div>
-      <div class="status-box ${remaining.external<=0?'full':''}"><div class="num">${remaining.external}</div><div class="label">院外 残り</div></div>
-      <div class="status-box ${remaining.internal_medicine<=0?'full':''}"><div class="num">${remaining.internal_medicine}</div><div class="label">内科系 残り</div></div>
-      <div class="status-box ${remaining.surgery<=0?'full':''}"><div class="num">${remaining.surgery}</div><div class="label">外科系 残り</div></div>
+    <div class="combo-status">
+      ${["IN_N", "IN_G", "EX_N", "EX_G"].map(k => `
+        <div class="combo-box ${counts[k] > 0 ? 'done' : ''}">
+          <div class="combo-num">${counts[k]}</div>
+          <div class="combo-label">${COMBO_LABEL[k]}</div>
+        </div>
+      `).join("")}
     </div>
-    <div class="small-muted">確定クール: ${filledCourses.size} / 6</div>
+    <div class="small-muted" style="margin-top:8px;">確定クール: ${filledCourses.size} / 6　（院内内科・院内外科・院外内科・院外外科を最低1回ずつ、残り2回は「院内内科+院外外科」または「院外内科+院内外科」のどちらかの組み合わせで埋まります）</div>
   </div>`;
 
   if (assignments.length > 0) {
@@ -180,7 +200,7 @@ async function renderApp(student, round, assignments) {
 
   let canEdit = false;
   let myPref = null;
-  let attempt = 1;
+  let attempt = round.phase === "second_match" ? 2 : 1;
 
   if (notStarted) {
     html += `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください。</div>`;
@@ -188,80 +208,46 @@ async function renderApp(student, round, assignments) {
     return;
   }
 
-  // まず「第1希望(attempt=1)」の自分の結果を必ず確認する。
-  // (ラウンド全体が2次マッチングに進んでいても、自分は1次で当選している場合があるため)
-  const { data: pref1 } = await sb
+  const { data: pref } = await sb
     .from("preferences")
     .select("*, slots(facility_name, department_name)")
     .eq("student_id", student.id)
     .eq("round_id", round.id)
-    .eq("attempt", 1)
+    .eq("attempt", attempt)
     .maybeSingle();
+  myPref = pref;
 
   let statusNotice = "";
-
-  if (pref1 && pref1.status === "confirmed") {
-    // 1次希望で当選・確定済み
-    myPref = pref1;
-    attempt = 1;
-    canEdit = false;
-    statusNotice = `<div class="notice success">🎉 おめでとうございます！${window.COURSE_LABELS[pref1.course_number-1]}「${esc(pref1.slots.facility_name)} ${esc(pref1.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
-  } else {
-    attempt = round.phase === "second_match" ? 2 : 1;
-    if (attempt === 2) {
-      const { data: pref2 } = await sb
-        .from("preferences")
-        .select("*, slots(facility_name, department_name)")
-        .eq("student_id", student.id)
-        .eq("round_id", round.id)
-        .eq("attempt", 2)
-        .maybeSingle();
-      myPref = pref2;
-    } else {
-      myPref = pref1;
+  if (round.phase === "closed") {
+    statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
+  } else if (round.phase === "first_choice" && firstEnded) {
+    statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
+  } else if (round.phase === "second_match" && secondEnded) {
+    statusNotice = `<div class="notice info">2次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
+  } else if (attempt === 1) {
+    if (!myPref || myPref.status === "submitted") {
+      canEdit = true;
+      if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
+    } else if (myPref.status === "confirmed") {
+      statusNotice = `<div class="notice confirmed">今回の希望は確定しました。次のラウンドをお待ちください。</div>`;
+    } else if (myPref.status === "lost") {
+      statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
     }
-
-    if (round.phase === "closed") {
-      statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
-    } else if (round.phase === "first_choice" && firstEnded) {
-      statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
-    } else if (round.phase === "second_match" && secondEnded) {
-      statusNotice = `<div class="notice info">2次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
-    } else if (attempt === 1) {
-      if (!myPref || myPref.status === "submitted") {
-        canEdit = true;
-        if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
-      }
+  } else {
+    if (!myPref) {
+      canEdit = true;
+      statusNotice = `<div class="notice warn">抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
+    } else if (myPref.status === "submitted") {
+      canEdit = true;
+      statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
+    } else if (myPref.status === "confirmed") {
+      statusNotice = `<div class="notice confirmed">2次希望が確定しました。次のラウンドをお待ちください。</div>`;
     } else {
-      if (pref1 && pref1.status === "lost") {
-        if (!myPref) {
-          canEdit = true;
-          statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
-        } else if (myPref.status === "submitted") {
-          canEdit = true;
-          statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
-        } else if (myPref.status === "confirmed") {
-          statusNotice = `<div class="notice success">🎉 おめでとうございます！2次希望で「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
-        } else {
-          statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
-        }
-      } else if (!pref1) {
-        // 1次希望を出していなかった場合も2次マッチングに参加可能
-        if (!myPref) {
-          canEdit = true;
-          statusNotice = `<div class="notice info">1次希望の提出がありませんでした。空いている枠から希望を選んでください。</div>`;
-        } else if (myPref.status === "submitted") {
-          canEdit = true;
-          statusNotice = `<div class="notice confirmed">希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
-        } else if (myPref.status === "confirmed") {
-          statusNotice = `<div class="notice success">🎉 おめでとうございます！「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
-        }
-      }
+      statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
     }
   }
   html += statusNotice;
 
-  // 自分の名前を公開するボタン（宿泊不要施設・かつ未公開の場合のみ表示）
   if (myPref && (myPref.status === "submitted" || myPref.status === "lottery") && !myPref.reveal_self) {
     html += `<div class="card">
       <div class="flex-between">
@@ -271,19 +257,15 @@ async function renderApp(student, round, assignments) {
     </div>`;
   }
 
-  const remainingTermsIncludingThis = 6 - filledCourses.size;
-  const forceNaika = remaining.internal_medicine > 0 && remaining.internal_medicine === remainingTermsIncludingThis;
-  const forceGeka = remaining.surgery > 0 && remaining.surgery === remainingTermsIncludingThis;
-  const forceInternal = remaining.internal > 0 && remaining.internal === remainingTermsIncludingThis;
-  const forceExternal = remaining.external > 0 && remaining.external === remainingTermsIncludingThis;
-
-  const forceMsgs = [];
-  if (forceNaika) forceMsgs.push("内科系");
-  if (forceGeka) forceMsgs.push("外科系");
-  if (forceInternal) forceMsgs.push("院内");
-  if (forceExternal) forceMsgs.push("院外");
-  if (forceMsgs.length > 0) {
-    html += `<div class="notice warn">残りターム数の都合上、今回は「${forceMsgs.join("・")}」の中から選ぶ必要があります(そうしないと院内3/院外3・内科3/外科3を満たせなくなります)。</div>`;
+  if (feasible.length === 1) {
+    const a = feasible[0];
+    const target = { IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a };
+    const remainMsg = ["IN_N","IN_G","EX_N","EX_G"]
+      .filter(k => counts[k] < target[k])
+      .map(k => COMBO_LABEL[k]);
+    if (remainMsg.length > 0) {
+      html += `<div class="notice warn">組み合わせの都合上、残りは「${remainMsg.join("・")}」から選ぶ必要があります。</div>`;
+    }
   }
 
   appEl.innerHTML = html;
@@ -312,9 +294,6 @@ async function renderApp(student, round, assignments) {
     .from("assignments")
     .select("slot_id, course_number, students(attendance_number, name)");
 
-  // 施設全体（同一施設・同一クール内の全診療科合計）の現在人数を集計
-  // ・facilityCourseCount: 確定+希望中の合計（枠の色分け＝オレンジ/赤の判定に使用）
-  // ・facilityConfirmedCount: 確定のみの合計（施設全体が確定人数だけで満員かどうかの判定に使用）
   const facilityCourseCount = {};
   const facilityConfirmedCount = {};
   for (const s of slots) {
@@ -328,12 +307,11 @@ async function renderApp(student, round, assignments) {
     }
   }
 
-  const forceFlags = { forceNaika, forceGeka, forceInternal, forceExternal };
   const globalRevealed = !round.reveal_at || now >= new Date(round.reveal_at);
 
   renderLegend(globalRevealed);
-  renderFullGrid("internal", "院内", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
-  renderFullGrid("external", "院外", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
+  renderFullGrid("internal", "院内", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
+  renderFullGrid("external", "院外", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
 }
 
 function renderLegend(globalRevealed) {
@@ -342,19 +320,19 @@ function renderLegend(globalRevealed) {
       <div class="legend">
         <span><span class="sw" style="background:#fff2a8;border:1px solid #d8c463;"></span>内科系</span>
         <span><span class="sw" style="background:#b9e6b5;border:1px solid #7fc27a;"></span>外科系</span>
-        <span><span class="sw" style="background:#fceccb;border:2px solid #d99a3a;"></span>ちょうど定員(あと1人で超過)</span>
+        <span><span class="sw" style="background:#fceccb;border:2px solid #d99a3a;"></span>ちょうど定員</span>
         <span><span class="sw" style="background:#fbeceb;border:2px solid #b3413a;"></span>定員超過中(それでも選択可)</span>
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
-        <span><span class="sw" style="background:#d9f0e8;border:2px solid #2e7d6b;"></span>あなたの希望</span>
+        <span><span class="sw" style="background:#ede4f7;border:2px solid #7b4fb8;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。①〜⑥のうち、まだ決まっていないクールならどこでも選べます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。${globalRevealed
+      <p class="small-muted">院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。${globalRevealed
         ? "氏名は全体公開されています。"
         : "現在は匿名期間中のため、他の人の希望は基本的に「人数」のみ表示されます。ただし、本人が公開した場合や、宿泊調整が必要な施設は氏名が見えます。"}</p>
     </div>
   `);
 }
 
-function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses) {
+function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses) {
   const list = slots
     .filter(s => s.institution_type === institutionType)
     .sort((a, b) => a.sort_order - b.sort_order);
@@ -362,13 +340,16 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
   if (list.length === 0) return;
 
   let rows = "";
+  let prevFacility = null;
   for (const s of list) {
     const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
+    const facilityChanged = institutionType === "external" && s.facility_name !== prevFacility;
+    prevFacility = s.facility_name;
     const limit = limitMap[s.facility_name];
     const limitBadge = limit ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで</div>` : "";
-    rows += `<tr class="${rowClass}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}</td>`;
+    rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}</td>`;
     for (let c = 1; c <= 6; c++) {
-      rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
+      rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
     }
     rows += `</tr>`;
   }
@@ -408,7 +389,7 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
   });
 }
 
-function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, remaining, forceFlags, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses) {
+function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses) {
   const cap = slot["cap_" + courseNumber];
   const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
 
@@ -421,7 +402,6 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
 
-  // すでに確定済みのクール列は参考表示のみ
   if (filledCourses.has(courseNumber)) {
     const namesHtml = confirmedHere.map(a =>
       a.students.attendance_number === student.attendance_number
@@ -440,7 +420,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const totalCount = confirmedHere.length + pendingHere.length;
   const isExactFull = totalCount === cap;
   const isOverFull = totalCount > cap;
-  const confirmedFull = confirmedHere.length >= cap; // 確定人数だけで定員に達した＝もう空きなし
+  const confirmedFull = confirmedHere.length >= cap;
 
   const facilityLimit = limitMap[slot.facility_name];
   const facKey = slot.facility_name + "_" + courseNumber;
@@ -451,9 +431,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const lodging = requiresLodging(slot);
 
-  // 確定者は匿名期間中でも常に名前を表示する（決着済みのため）
   const confirmedNamesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("、 ");
-
   let pendingNamesHtml = "";
   if (globalRevealed) {
     pendingNamesHtml = pendingHere.map(p => `${esc(p.students.name)}`).join("、 ");
@@ -468,10 +446,8 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     if (hiddenCount > 0) shown.push(`${hiddenCount}名希望中`);
     pendingNamesHtml = shown.join(" + ");
   }
-
   const namesHtml = [confirmedNamesHtml, pendingNamesHtml].filter(Boolean).join("、 ");
 
-  // 確定人数だけで満員（自分の科、または施設全体のどちらか）→ 競争の余地なし。以後は選択不可
   if (confirmedFull || facilityConfirmedFull) {
     const label = confirmedFull ? "満員(確定)" : "施設全体満員(確定)";
     return `<td class="cell-slot cell-full">
@@ -481,20 +457,8 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     </td>`;
   }
 
-  let eligible = canEdit && (
-    (slot.institution_type === "internal" && remaining.internal > 0) ||
-    (slot.institution_type === "external" && remaining.external > 0)
-  ) && (
-    (slot.category === "internal_medicine" && remaining.internal_medicine > 0) ||
-    (slot.category === "surgery" && remaining.surgery > 0)
-  );
-
-  if (eligible) {
-    if (forceFlags.forceNaika && slot.category !== "internal_medicine") eligible = false;
-    if (forceFlags.forceGeka && slot.category !== "surgery") eligible = false;
-    if (forceFlags.forceInternal && slot.institution_type !== "internal") eligible = false;
-    if (forceFlags.forceExternal && slot.institution_type !== "external") eligible = false;
-  }
+  const combo = comboKeyOf(slot);
+  let eligible = canEdit && comboEligible(counts, combo, feasible);
 
   let cls = "cell-slot";
   if (eligible) cls += " cell-open";
