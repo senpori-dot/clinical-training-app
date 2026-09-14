@@ -393,7 +393,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
   if (isKuroshio) {
     const kuroshioConfirmed = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
-    const kuroshioNames = kuroshioConfirmed.map(a => `<b>${esc(a.students.name)}</b>`).join("、 ");
+    const kuroshioNames = kuroshioConfirmed.map(a => `<b>${esc(a.students.name)}</b>`).join("<br>");
     return `<td class="cell-slot cell-blocked">
       <div class="cell-cap">対象者のみ</div>
       ${kuroshioNames ? `<div class="cell-names">${kuroshioNames}</div>` : ""}
@@ -407,7 +407,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
       a.students.attendance_number === student.attendance_number
         ? `<span class="me-confirmed">✔ ${esc(a.students.name)}(あなた)</span>`
         : `<b>${esc(a.students.name)}</b>`
-    ).join("、 ");
+    ).join("<br>");
     return `<td class="cell-slot cell-other-term">
       <div class="cell-cap">${confirmedHere.length}/${cap}</div>
       ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
@@ -431,7 +431,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const lodging = requiresLodging(slot);
 
-  const confirmedNamesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("、 ");
+  const confirmedNamesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("<br>");
 
   // 匿名ルール：
   // ・宿泊が絡む施設 → 本人が公開ボタンを押した人、または既に公開済みの人は名前表示。それ以外は人数のみ。
@@ -446,7 +446,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
       else hiddenCount++;
     }
     if (hiddenCount > 0) shown.push(`${hiddenCount}名希望中`);
-    pendingNamesHtml = shown.join(" + ");
+    pendingNamesHtml = shown.join("<br>");
   } else {
     const shown = [];
     let hiddenCount = 0;
@@ -455,9 +455,9 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
       else hiddenCount++;
     }
     if (hiddenCount > 0) shown.push(`${hiddenCount}名希望中`);
-    pendingNamesHtml = shown.join(" + ");
+    pendingNamesHtml = shown.join("<br>");
   }
-  const namesHtml = [confirmedNamesHtml, pendingNamesHtml].filter(Boolean).join("、 ");
+  const namesHtml = [confirmedNamesHtml, pendingNamesHtml].filter(Boolean).join("<br>");
 
   if (confirmedFull || facilityConfirmedFull) {
     const label = confirmedFull ? "満員(確定)" : "施設全体満員(確定)";
