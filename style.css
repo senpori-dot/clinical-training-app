@@ -202,9 +202,9 @@ td.cell-full { background: #f6dede; color: #a33; cursor: not-allowed; }
 td.cell-col-filled { opacity: 0.35; }
 td.cell-open { cursor: pointer; }
 td.cell-open:active { background: #d7ecec; }
-td.cell-overbook { box-shadow: inset 0 0 0 2px #d99a3a; }
+td.cell-overbook { box-shadow: inset 0 0 0 2px #d99a3a; background: #fceccb; }
 td.cell-overflow { box-shadow: inset 0 0 0 2px #b3413a; background: #fbeceb; }
-td.cell-mine { outline: 3px solid #7b4fb8; outline-offset: -3px; background: #ede4f7 !important; font-weight: 700; }
+td.cell-mine { outline: 3px solid #7b4fb8; outline-offset: -3px; font-weight: 700; }
 td.cell-ineligible { color: #bbb; }
 td.cell-other-term { color: #8a8f8a; background: #f4f5f3; }
 th.col-active { background: #2e7d6b !important; }

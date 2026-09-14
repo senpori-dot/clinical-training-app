@@ -78,7 +78,7 @@ function openFacilityModal(info) {
             <tr><td style="width:90px;"><b>宿泊施設</b></td><td>${esc(info.accommodation) || "情報なし"}</td></tr>
             <tr><td><b>集合時間</b></td><td>${esc(info.gather_time) || "情報なし"}</td></tr>
             ${info.limit_note ? `<tr><td><b>人数上限</b></td><td>${esc(info.limit_note)}</td></tr>` : ""}
-            ${requiresLodging(info) ? `<tr><td><b>氏名公開</b></td><td>宿泊調整が必要な施設です。この施設への希望は、本人が「公開する」を選べば匿名期間中でも氏名が見えるようになります。</td></tr>` : ""}
+            ${requiresLodging(info) ? `<tr><td><b>氏名公開</b></td><td>宿泊調整が必要な施設のため、この施設の希望は最初から氏名が表示されます。</td></tr>` : ""}
           </tbody>
         </table>
         <div style="margin-top:10px;">
@@ -244,16 +244,6 @@ async function renderApp(student, round, assignments) {
   }
   html += statusNotice;
 
-  const myPrefLodging = myPref && myPref.slots && requiresLodging(myPref.slots);
-  if (myPref && (myPref.status === "submitted" || myPref.status === "lottery") && !myPref.reveal_self && myPrefLodging) {
-    html += `<div class="card">
-      <div class="flex-between">
-        <span class="small-muted">宿泊調整が必要な施設です。今の希望を他の学生にも公開して、部屋割りなどの話し合いをしやすくできます。</span>
-        <button class="small secondary" id="reveal-self-btn">自分の名前を公開する</button>
-      </div>
-    </div>`;
-  }
-
   if (feasible.length === 1) {
     const a = feasible[0];
     const target = { IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a };
@@ -266,14 +256,6 @@ async function renderApp(student, round, assignments) {
   }
 
   appEl.innerHTML = html;
-
-  if (myPref && (myPref.status === "submitted" || myPref.status === "lottery") && !myPref.reveal_self && myPrefLodging) {
-    document.getElementById("reveal-self-btn").onclick = async () => {
-      if (!confirm("自分の名前を公開します。一度公開すると匿名には戻せません。よろしいですか？")) return;
-      await sb.from("preferences").update({ reveal_self: true }).eq("id", myPref.id);
-      location.reload();
-    };
-  }
 
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
   const { data: facilityLimits } = await sb.from("facility_limits").select("*");
@@ -322,7 +304,7 @@ function renderLegend(globalRevealed) {
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/対象者限定</span>
         <span><span class="sw" style="background:#ede4f7;border:2px solid #7b4fb8;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡まない施設の希望者は、抽選で確定するまで氏名は表示されません（人数のみ）。宿泊が絡む施設は、本人が希望すれば匿名期間中でも公開できます。</p>
+      <p class="small-muted">院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。</p>
     </div>
   `);
 }
@@ -395,7 +377,6 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     const kuroshioConfirmed = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
     const kuroshioNames = kuroshioConfirmed.map(a => `<b>${esc(a.students.name)}</b>`).join("<br>");
     return `<td class="cell-slot cell-blocked">
-      <div class="cell-cap">対象者のみ</div>
       ${kuroshioNames ? `<div class="cell-names">${kuroshioNames}</div>` : ""}
     </td>`;
   }
@@ -434,19 +415,13 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const confirmedNamesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("<br>");
 
   // 匿名ルール：
-  // ・宿泊が絡む施設 → 本人が公開ボタンを押した人、または既に公開済みの人は名前表示。それ以外は人数のみ。
-  // ・宿泊が絡まない施設 → 抽選確定(confirmed)するまでは絶対に名前を出さない（自分自身の分を除く）。
+  // ・宿泊が絡む施設 → 最初から全員に氏名を表示（部屋割り調整のため）。
+  // ・宿泊が絡まない施設 → 抽選確定(confirmed)するまでは氏名を出さない（自分自身の分を除く）。
   let pendingNamesHtml = "";
   if (lodging) {
-    const shown = [];
-    let hiddenCount = 0;
-    for (const p of pendingHere) {
-      if (p.student_id === student.id) shown.push(`<b>あなた</b>`);
-      else if (p.reveal_self) shown.push(esc(p.students.name));
-      else hiddenCount++;
-    }
-    if (hiddenCount > 0) shown.push(`${hiddenCount}名希望中`);
-    pendingNamesHtml = shown.join("<br>");
+    pendingNamesHtml = pendingHere.map(p =>
+      p.student_id === student.id ? `<b>あなた（${esc(p.students.name)}）</b>` : esc(p.students.name)
+    ).join("<br>");
   } else {
     const shown = [];
     let hiddenCount = 0;
