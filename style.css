@@ -212,6 +212,16 @@ button:disabled { background: #b9c0bc; cursor: not-allowed; }
   font-weight: 700;
 }
 
+.countdown-box {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #eaf1f7;
+  border-radius: 8px;
+  font-weight: 700;
+  color: var(--navy);
+  display: inline-block;
+}
+
 .note-text {
   font-size: 0.78rem;
   color: var(--muted);

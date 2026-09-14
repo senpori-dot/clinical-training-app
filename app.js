@@ -36,6 +36,28 @@ function ensureRefreshButton() {
   document.body.appendChild(btn);
 }
 
+function startCountdown(targetIso) {
+  const target = new Date(targetIso).getTime();
+  const timerEl = document.getElementById("countdown-timer");
+  if (!timerEl) return;
+  function tick() {
+    const el = document.getElementById("countdown-timer");
+    if (!el) return; // ページが差し替わったら停止
+    const diff = target - Date.now();
+    if (diff <= 0) {
+      el.textContent = "まもなく処理されます…";
+      clearInterval(intervalId);
+      return;
+    }
+    const h = Math.floor(diff / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    el.textContent = `残り ${h}時間${String(m).padStart(2,"0")}分${String(s).padStart(2,"0")}秒`;
+  }
+  tick();
+  const intervalId = setInterval(tick, 1000);
+}
+
 function renderResultAnimation(kind) {
   if (kind === "win") {
     return `<div class="result-fx result-win">
@@ -50,7 +72,7 @@ function renderResultAnimation(kind) {
   }
   if (kind === "lose" || kind === "lose-once") {
     return `<div class="result-fx result-lose">
-      <div class="result-fx-text">😢 抽選に外れました。次は2次希望でチャレンジ！</div>
+      <div class="result-fx-text">😢 1次マッチングに外れました。2次マッチングに進んでください！</div>
     </div>`;
   }
   return "";
@@ -68,7 +90,7 @@ function maybeShowResultReveal(prefId, kind, detailText) {
   const configs = {
     win: { bg: "linear-gradient(135deg,#fff8e1,#ffe9b3)", emoji: "🎉", title: "当選しました！", color: "#a86a00", confetti: true },
     smooth: { bg: "#eaf6f0", emoji: "✅", title: "確定しました", color: "#1e6b3a", confetti: false },
-    lose: { bg: "#f3f3f3", emoji: "😢", title: "抽選に外れました", color: "#6b7680", confetti: false },
+    lose: { bg: "#f3f3f3", emoji: "😢", title: "1次マッチングに外れました", color: "#6b7680", confetti: false },
     alldone: { bg: "linear-gradient(135deg,#e3f3ff,#d3e8ff)", emoji: "🏁", title: "お疲れ様でした！", color: "#1c3a5e", confetti: true },
   };
   const cfg = configs[kind] || configs.smooth;
@@ -270,15 +292,29 @@ async function renderApp(student, round, assignments) {
 
   const now = new Date();
 
+  const notStarted0 = round.start_at && now < new Date(round.start_at);
+  const firstEnded0 = round.end_at && now > new Date(round.end_at);
+  const secondEnded0 = round.second_deadline && now > new Date(round.second_deadline);
+
+  let countdownTarget = null, countdownLabel = "";
+  if (notStarted0) { countdownTarget = round.start_at; countdownLabel = "開始まで"; }
+  else if (round.phase === "first_choice" && !firstEnded0 && round.end_at) { countdownTarget = round.end_at; countdownLabel = "1次締切まで"; }
+  else if (round.phase === "second_match" && !secondEnded0 && round.second_deadline) { countdownTarget = round.second_deadline; countdownLabel = "2次締切まで"; }
+
   html += `<div class="card"><b>現在のラウンド：第${round.round_number}希望</b>`;
   if (round.start_at) html += `<div class="small-muted">開始: ${fmtDate(round.start_at)}</div>`;
   if (round.end_at) html += `<div class="small-muted">1次締切: ${fmtDate(round.end_at)}</div>`;
   if (round.second_deadline) html += `<div class="small-muted">2次締切: ${fmtDate(round.second_deadline)}</div>`;
+  if (countdownTarget) {
+    html += `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>`;
+  } else if (!notStarted0 && (round.phase === "closed" || (round.phase === "second_match" && secondEnded0) || (round.phase === "first_choice" && firstEnded0))) {
+    html += `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>`;
+  }
   html += `</div>`;
 
-  const notStarted = round.start_at && now < new Date(round.start_at);
-  const firstEnded = round.end_at && now > new Date(round.end_at);
-  const secondEnded = round.second_deadline && now > new Date(round.second_deadline);
+  const notStarted = notStarted0;
+  const firstEnded = firstEnded0;
+  const secondEnded = secondEnded0;
 
   let canEdit = false;
   let myPref = null;
@@ -335,20 +371,20 @@ async function renderApp(student, round, assignments) {
         canEdit = true;
         if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
       } else if (myPref.status === "lost") {
-        statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
+        statusNotice = `<div class="notice warn">1次マッチングに外れました。2次マッチングに進んでください。</div>`;
         resultAnimation = "lose";
         resultPrefId = myPref.id;
-        resultDetailText = "第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。";
+        resultDetailText = "1次マッチングに外れました。2次マッチングに進んでください。";
       }
     } else {
       if (pref1 && pref1.status === "lost" && resultAnimation === "") {
         resultAnimation = "lose-once";
         resultPrefId = pref1.id;
-        resultDetailText = "第一希望は抽選に外れました。2次希望へ進んでください。";
+        resultDetailText = "1次マッチングに外れました。2次マッチングに進んでください。";
       }
       if (!myPref) {
         canEdit = true;
-        statusNotice = `<div class="notice warn">抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
+        statusNotice = `<div class="notice warn">1次マッチングに外れました。空いている枠から2次希望を選んでください。</div>`;
       } else if (myPref.status === "submitted") {
         canEdit = true;
         statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
@@ -386,6 +422,9 @@ async function renderApp(student, round, assignments) {
   appEl.innerHTML = html;
   if (resultAnimation) {
     maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
+  }
+  if (countdownTarget) {
+    startCountdown(countdownTarget);
   }
 
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
