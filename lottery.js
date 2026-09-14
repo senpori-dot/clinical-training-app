@@ -82,6 +82,13 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
   const shuffled = (prefs || []).slice().sort(() => Math.random() - 0.5);
   let confirmedCount = 0, lostCount = 0;
 
+  // 各(枠,クール)ごとの今回の希望者数を先に数えておく（抽選が発生したかどうかの判定に使う）
+  const groupTotal = {};
+  for (const p of shuffled) {
+    const key = p.slot_id + "_" + p.course_number;
+    groupTotal[key] = (groupTotal[key] || 0) + 1;
+  }
+
   for (const p of shuffled) {
     const slot = slotMap[p.slot_id];
     if (!slot) { // 万一slot情報が取れなければ安全側に倒してlostにする
@@ -96,9 +103,10 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
     const curSlot = slotCourseCount[slotKey] || 0;
     const curFac = facilityCourseCount[facKey] || 0;
     const facLimit = limitMap[fname];
+    const wasCompetitive = (groupTotal[slotKey] + curSlot) > cap;
 
     if (curSlot < cap && (!facLimit || curFac < facLimit)) {
-      await sb.from("preferences").update({ status: "confirmed" }).eq("id", p.id);
+      await sb.from("preferences").update({ status: "confirmed", won_lottery: wasCompetitive }).eq("id", p.id);
       await sb.from("assignments").upsert(
         { student_id: p.student_id, course_number: p.course_number, slot_id: p.slot_id },
         { onConflict: "student_id,course_number" }
@@ -107,7 +115,7 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
       facilityCourseCount[facKey] = curFac + 1;
       confirmedCount++;
     } else {
-      await sb.from("preferences").update({ status: "lost" }).eq("id", p.id);
+      await sb.from("preferences").update({ status: "lost", won_lottery: false }).eq("id", p.id);
       lostCount++;
     }
   }

@@ -26,6 +26,26 @@ function requiresLodging(slot) {
   return acc.includes("○");
 }
 
+function renderResultAnimation(kind) {
+  if (kind === "win") {
+    return `<div class="result-fx result-win">
+      <div class="confetti">${"🎉🎊✨🎈".split("").map((c,i)=>`<span style="--i:${i}">${c}</span>`).join("")}</div>
+      <div class="result-fx-text">抽選、当選！</div>
+    </div>`;
+  }
+  if (kind === "smooth") {
+    return `<div class="result-fx result-smooth">
+      <div class="result-fx-text">✅ 無事に確定しました</div>
+    </div>`;
+  }
+  if (kind === "lose" || kind === "lose-once") {
+    return `<div class="result-fx result-lose">
+      <div class="result-fx-text">😢 抽選に外れました。次は2次希望でチャレンジ！</div>
+    </div>`;
+  }
+  return "";
+}
+
 function comboKeyOf(slot) {
   const inst = slot.institution_type === "internal" ? "IN" : "EX";
   const cat = slot.category === "internal_medicine" ? "N" : "G";
@@ -204,45 +224,75 @@ async function renderApp(student, round, assignments) {
     return;
   }
 
-  const { data: pref } = await sb
+  const { data: pref1 } = await sb
     .from("preferences")
     .select("*, slots(facility_name, department_name, facility_accommodation, accommodation)")
     .eq("student_id", student.id)
     .eq("round_id", round.id)
-    .eq("attempt", attempt)
+    .eq("attempt", 1)
     .maybeSingle();
-  myPref = pref;
 
   let statusNotice = "";
-  if (round.phase === "closed") {
-    statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
-  } else if (round.phase === "first_choice" && firstEnded) {
-    statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
-  } else if (round.phase === "second_match" && secondEnded) {
-    statusNotice = `<div class="notice info">2次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
-  } else if (attempt === 1) {
-    if (!myPref || myPref.status === "submitted") {
-      canEdit = true;
-      if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
-    } else if (myPref.status === "confirmed") {
-      statusNotice = `<div class="notice confirmed">今回の希望は確定しました。次のラウンドをお待ちください。</div>`;
-    } else if (myPref.status === "lost") {
-      statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
-    }
+  let resultAnimation = "";
+
+  if (pref1 && pref1.status === "confirmed") {
+    // 1次希望で当選・確定済み（ラウンド全体が2次マッチングに進んでいても、この学生自身は1次で決着済み）
+    myPref = pref1;
+    attempt = 1;
+    canEdit = false;
+    const wonLottery = pref1.won_lottery === true;
+    statusNotice = `<div class="notice success">🎉 おめでとうございます！${window.COURSE_LABELS[pref1.course_number-1]}「${esc(pref1.slots.facility_name)} ${esc(pref1.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
+    resultAnimation = wonLottery ? "win" : "smooth";
   } else {
-    if (!myPref) {
-      canEdit = true;
-      statusNotice = `<div class="notice warn">抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
-    } else if (myPref.status === "submitted") {
-      canEdit = true;
-      statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
-    } else if (myPref.status === "confirmed") {
-      statusNotice = `<div class="notice confirmed">2次希望が確定しました。次のラウンドをお待ちください。</div>`;
+    attempt = round.phase === "second_match" ? 2 : 1;
+    const { data: pref2 } = attempt === 2 ? await sb
+      .from("preferences")
+      .select("*, slots(facility_name, department_name, facility_accommodation, accommodation)")
+      .eq("student_id", student.id)
+      .eq("round_id", round.id)
+      .eq("attempt", 2)
+      .maybeSingle() : { data: null };
+    myPref = attempt === 2 ? pref2 : pref1;
+
+    if (round.phase === "closed") {
+      statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
+    } else if (round.phase === "first_choice" && firstEnded) {
+      statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
+    } else if (round.phase === "second_match" && secondEnded) {
+      statusNotice = `<div class="notice info">2次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
+    } else if (attempt === 1) {
+      if (!myPref || myPref.status === "submitted") {
+        canEdit = true;
+        if (myPref) statusNotice = `<div class="notice confirmed">${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を希望として提出済みです。表をタップすると変更できます。</div>`;
+      } else if (myPref.status === "lost") {
+        statusNotice = `<div class="notice warn">第一希望は抽選の結果、埋まってしまいました。事務局が2次マッチングを開始するまでお待ちください。</div>`;
+        resultAnimation = "lose";
+      }
     } else {
-      statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
+      if (pref1 && pref1.status === "lost" && resultAnimation === "") {
+        resultAnimation = "lose-once";
+      }
+      if (!myPref) {
+        canEdit = true;
+        statusNotice = `<div class="notice warn">抽選の結果、埋まってしまいました。空いている枠から2次希望を選んでください。</div>`;
+      } else if (myPref.status === "submitted") {
+        canEdit = true;
+        statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
+      } else if (myPref.status === "confirmed") {
+        const wonLottery = myPref.won_lottery === true;
+        statusNotice = `<div class="notice success">🎉 おめでとうございます！2次希望で「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
+        resultAnimation = wonLottery ? "win" : "smooth";
+      } else {
+        statusNotice = `<div class="notice warn">2次希望も埋まってしまいました。事務局にご相談ください。</div>`;
+        resultAnimation = "lose";
+      }
     }
   }
   html += statusNotice;
+
+  if (resultAnimation) {
+    html += renderResultAnimation(resultAnimation);
+  }
 
   if (feasible.length === 1) {
     const a = feasible[0];
