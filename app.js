@@ -173,8 +173,6 @@ function openRulesModal() {
 <p><b>■ 地域枠・県民枠・留学について</b></p>
 <p>地域枠・県民枠・留学に行く人は、すでにいくつかのクールが確定した状態でスタートします。そのため早く決まるというメリットがありますが、どちらも「義務」であり「選抜のうえで得た1枠」です。その点はご理解をお願いします🙏</p>
 
-<p><b>■ 院外の病院を選ぶときの注意</b></p>
-<p>院外の病院を選択する必要がありますが、家が遠い・車を持っていないなどの個別の事情がある方は、優先される対象になる場合があります。該当する事情がある方は、坂本までご相談ください。</p>
 
         </div>
       </div>
@@ -703,7 +701,7 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">
       <b>${label}の実習先</b>
-      ${institutionType === "external" ? `<div class="notice info" style="margin-top:8px;">院外を選ぶ際、家が遠い・車を持っていないなどの個別の事情がある方は、優先される対象になる場合があります。該当する事情がある方は坂本までご相談ください。</div>` : ""}
+      ${institutionType === "external" ? `` : ""}
       <div class="grid-scroll" style="margin-top:8px;">
         <table class="pref-grid">
           <thead>${header}</thead>
