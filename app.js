@@ -41,6 +41,64 @@ function ensureRefreshButton() {
   rulesBtn.textContent = "📖 決め方のルール";
   rulesBtn.onclick = openRulesModal;
   document.body.appendChild(rulesBtn);
+
+  const scheduleBtn = document.createElement("button");
+  scheduleBtn.id = "schedule-fab";
+  scheduleBtn.className = "schedule-fab";
+  scheduleBtn.textContent = "📅 全体スケジュール";
+  scheduleBtn.onclick = openScheduleModal;
+  document.body.appendChild(scheduleBtn);
+}
+
+async function openScheduleModal() {
+  ensureModalRoot();
+  const root = document.getElementById("facility-modal-root");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="schedule-backdrop">
+      <div class="modal-box rules-box">
+        <div class="flex-between">
+          <b>第6希望までの全体スケジュール</b>
+          <button class="small secondary" id="schedule-close-btn">閉じる</button>
+        </div>
+        <div class="rules-content" id="schedule-content">読み込み中...</div>
+      </div>
+    </div>
+  `;
+  document.getElementById("schedule-close-btn").onclick = closeFacilityModal;
+  document.getElementById("schedule-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "schedule-backdrop") closeFacilityModal();
+  });
+
+  const { data: rounds } = await sb.from("rounds").select("*").order("round_number");
+  const contentEl = document.getElementById("schedule-content");
+  if (!contentEl) return; // モーダルが閉じられていたら何もしない
+
+  const phaseLabel = { first_choice: "希望受付中", first_choice_processing: "抽選処理中", second_match: "2次マッチング中", second_match_processing: "抽選処理中", closed: "終了" };
+
+  if (!rounds || rounds.length === 0) {
+    contentEl.innerHTML = `<p>まだラウンドは作成されていません。事務局からの案内をお待ちください。</p>`;
+    return;
+  }
+
+  const rows = rounds.map(r => `
+    <tr>
+      <td><b>第${r.round_number}希望</b></td>
+      <td>${r.is_current ? `<span style="color:#2e7d6b;font-weight:700;">${phaseLabel[r.phase] || r.phase}</span>` : (r.phase === "closed" ? "終了" : "予定")}</td>
+      <td class="small-muted">
+        開始: ${r.start_at ? fmtDate(r.start_at) : "未定"}<br/>
+        1次締切: ${r.end_at ? fmtDate(r.end_at) : "未定"}<br/>
+        2次締切: ${r.second_deadline ? fmtDate(r.second_deadline) : "未定"}
+      </td>
+    </tr>
+  `).join("");
+
+  contentEl.innerHTML = `
+    <table class="slots">
+      <thead><tr><th>ラウンド</th><th>状態</th><th>日程</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <p class="small-muted" style="margin-top:10px;">まだ作成されていないラウンドの日程は「未定」と表示されます。日程は状況により前後する場合があります。</p>
+  `;
 }
 
 function openRulesModal() {

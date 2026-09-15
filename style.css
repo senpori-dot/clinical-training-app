@@ -225,6 +225,19 @@ button:disabled { background: #b9c0bc; cursor: not-allowed; }
   font-weight: 700;
 }
 
+.schedule-fab {
+  position: fixed;
+  right: 16px;
+  bottom: 124px;
+  z-index: 500;
+  background: #7b4fb8;
+  color: white;
+  border-radius: 999px;
+  padding: 12px 18px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+  font-weight: 700;
+}
+
 .rules-box { max-width: 640px; text-align: left; }
 .rules-content { max-height: 65vh; overflow-y: auto; font-size: 0.88rem; line-height: 1.7; margin-top: 12px; }
 .rules-content p { margin: 0 0 10px; }
