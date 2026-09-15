@@ -74,23 +74,37 @@ async function openScheduleModal() {
   if (!contentEl) return; // モーダルが閉じられていたら何もしない
 
   const phaseLabel = { first_choice: "希望受付中", first_choice_processing: "抽選処理中", second_match: "2次マッチング中", second_match_processing: "抽選処理中", closed: "終了" };
+  const nowTs = Date.now();
 
   if (!rounds || rounds.length === 0) {
     contentEl.innerHTML = `<p>まだラウンドは作成されていません。事務局からの案内をお待ちください。</p>`;
     return;
   }
 
-  const rows = rounds.map(r => `
+  const rows = rounds.map(r => {
+    const notStartedYet = r.start_at && nowTs < new Date(r.start_at).getTime();
+    let statusHtml;
+    if (r.phase === "closed") {
+      statusHtml = "終了";
+    } else if (r.is_current && notStartedYet) {
+      statusHtml = `<span style="color:#b3413a;font-weight:700;">開始前</span>`;
+    } else if (r.is_current) {
+      statusHtml = `<span style="color:#2e7d6b;font-weight:700;">${phaseLabel[r.phase] || r.phase}</span>`;
+    } else {
+      statusHtml = "予定";
+    }
+    return `
     <tr>
       <td><b>第${r.round_number}希望</b></td>
-      <td>${r.is_current ? `<span style="color:#2e7d6b;font-weight:700;">${phaseLabel[r.phase] || r.phase}</span>` : (r.phase === "closed" ? "終了" : "予定")}</td>
+      <td>${statusHtml}</td>
       <td class="small-muted">
         開始: ${r.start_at ? fmtDate(r.start_at) : "未定"}<br/>
         1次締切: ${r.end_at ? fmtDate(r.end_at) : "未定"}<br/>
         2次締切: ${r.second_deadline ? fmtDate(r.second_deadline) : "未定"}
       </td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 
   contentEl.innerHTML = `
     <table class="slots">
