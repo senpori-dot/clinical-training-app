@@ -34,6 +34,84 @@ function ensureRefreshButton() {
   btn.textContent = "↻ 更新";
   btn.onclick = () => location.reload();
   document.body.appendChild(btn);
+
+  const rulesBtn = document.createElement("button");
+  rulesBtn.id = "rules-fab";
+  rulesBtn.className = "rules-fab";
+  rulesBtn.textContent = "📖 決め方のルール";
+  rulesBtn.onclick = openRulesModal;
+  document.body.appendChild(rulesBtn);
+}
+
+function openRulesModal() {
+  ensureModalRoot();
+  const root = document.getElementById("facility-modal-root");
+  root.innerHTML = `
+    <div class="modal-backdrop" id="rules-backdrop">
+      <div class="modal-box rules-box">
+        <div class="flex-between">
+          <b>実習先の決め方について</b>
+          <button class="small secondary" id="rules-close-btn">閉じる</button>
+        </div>
+        <div class="rules-content">
+
+<p>今回の実習先の決め方について説明します！</p>
+
+<p>基本的には、①〜⑥クールを順番に決めるのではなく、「第1希望→第2希望→…→第6希望」という形で、全員一緒に1枠ずつ決めていく方式にします。</p>
+
+<p><b>■ 進め方について</b></p>
+<ul>
+<li>基本的に1ラウンドは2日間ずつで進めます（1次締切・2次締切あわせて）。</li>
+<li>全ラウンド（第6希望まで）が終了した後に、お互いのトレード（交換）の期間も設ける予定です。</li>
+</ul>
+
+<p><b>■ どうやって希望を出す？</b></p>
+<p>第1希望では、まだ自分の実習先が決まっていない①〜⑥クールの中から、自分が一番優先したい「時期×実習先」を1つ選んで希望を出してください。</p>
+<p>例えば、</p>
+<ul>
+<li>就活のために⑤・⑥クールはなるべく余裕のある科に行きたい</li>
+<li>①〜④クールで自分の進路に関係する科に行きたい</li>
+<li>この病院・この診療科には絶対行きたい</li>
+</ul>
+<p>など、人によって優先したいことが違うと思います。そのため、全員が同じクールから順番に決めるのではなく、「自分にとって何が一番大事か」を自分で考えて、第1希望から順番に取っていく方式にしています。</p>
+<p>全員の第1希望のラウンドが終わったら第2希望、その次は第3希望……という形で進め、最終的に⑥クールまで決めていきます。</p>
+<p>イメージとしては「全員で1枠ずつ進む。ただし、何を1枠目・2枠目にするかは自分で決める」という感じです！</p>
+
+<p><b>■ 希望者の名前について</b></p>
+<p>基本的に、希望提出中は匿名です。その枠に現在何人希望しているかは確認できますが、誰が希望しているかは分からないようにします。</p>
+<p>ただし、宿泊が関係する病院については、部屋割り等の調整が必要になるため、希望提出の段階から名前を公開します。</p>
+<p>通常の枠については、1次締切後に抽選または定員内での確定が行われ、枠が確定した時点で確定者の名前が全員に表示されます。2次マッチングも同様に、希望提出中は基本匿名で、確定後に名前が表示されます。</p>
+
+<p><b>■ 希望が被った場合</b></p>
+<p>早い者勝ちではありません。締切までは定員を超えていても希望を出すことができます。</p>
+<ul>
+<li>1次締切の時点で定員以内 → そのまま確定</li>
+<li>定員オーバー → システムでランダム抽選</li>
+<li>抽選で外れた → 空いている枠で2次マッチング</li>
+</ul>
+<p>基本的に、1つのラウンドについては2次マッチングまでで終了する予定です。そのため、2次マッチングでも抽選に外れてしまった場合は、そのラウンドでは枠を確保できなかったという扱いになります。</p>
+<p>ただし、次のラウンドが始まるまでに個別にLINEをいただければ、空き状況を見て調整できる場合があります。原則として翌日12時までに連絡してください。ただし、同じ空き枠を複数人が希望している場合などは、希望通りに調整できない可能性があります。</p>
+<p>また、第5・第6ラウンドあたりになると空き枠自体が少なくなり、2次マッチングまででは全員決まらない可能性もあります。その場合は、状況を見て3次マッチングを追加するなど、必要に応じて対応します。</p>
+
+<p><b>■ 院内3・院外3、内科3・外科3について</b></p>
+<p>要件を満たせるように、アプリ上で現在の取得状況を確認できるようにしています。</p>
+<p>また、選択した結果、最終的に必要な組み合わせを満たせなくなることが分かっている場合は、該当する枠を選択できないようにします。</p>
+<p>ただし、第6ラウンド終盤など、必要な「院外・内科系」等の枠そのものが残っていないという状況が発生する可能性はあります。その場合については、こちらだけで無理に決めるのではなく、学生課と相談のうえで個別に調整します。状況によっては、例外的に院内が4クールになるなど、通常の3:3から変更が必要になる可能性もあります。このあたりは実際の残り枠の状況によるため、その時点で相談して対応します。</p>
+
+<p><b>■ 地域枠・県民枠・留学について</b></p>
+<p>地域枠・県民枠・留学に行く人は、すでにいくつかのクールが確定した状態でスタートします。そのため早く決まるというメリットがありますが、どちらも「義務」であり「選抜のうえで得た1枠」です。その点はご理解をお願いします🙏</p>
+
+<p><b>■ 院外の病院を選ぶときの注意</b></p>
+<p>院外の病院を選択する必要がありますが、家が遠い・車を持っていないなどの個別の事情がある方は、優先される対象になる場合があります。該当する事情がある方は、坂本までご相談ください。</p>
+
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById("rules-close-btn").onclick = closeFacilityModal;
+  document.getElementById("rules-backdrop").addEventListener("click", (e) => {
+    if (e.target.id === "rules-backdrop") closeFacilityModal();
+  });
 }
 
 function startCountdown(targetIso) {
@@ -553,6 +631,7 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
   appEl.insertAdjacentHTML("beforeend", `
     <div class="card">
       <b>${label}の実習先</b>
+      ${institutionType === "external" ? `<div class="notice info" style="margin-top:8px;">院外を選ぶ際、家が遠い・車を持っていないなどの個別の事情がある方は、優先される対象になる場合があります。該当する事情がある方は坂本までご相談ください。</div>` : ""}
       <div class="grid-scroll" style="margin-top:8px;">
         <table class="pref-grid">
           <thead>${header}</thead>
