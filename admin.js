@@ -42,6 +42,7 @@ async function renderDashboard() {
       <button data-tab="students" class="${activeTab==='students'?'active':''}">学生・リンク</button>
       <button data-tab="rounds" class="${activeTab==='rounds'?'active':''}">ラウンド管理</button>
       <button data-tab="matching" class="${activeTab==='matching'?'active':''}">集計・抽選</button>
+      <button data-tab="lodging" class="${activeTab==='lodging'?'active':''}">宿泊希望</button>
     </div>
     <div id="tab-content"><p>読み込み中...</p></div>
   `;
@@ -50,7 +51,72 @@ async function renderDashboard() {
   });
   if (activeTab === "students") renderStudentsTab();
   else if (activeTab === "rounds") renderRoundsTab();
-  else renderMatchingTab();
+  else if (activeTab === "matching") renderMatchingTab();
+  else renderLodgingTab();
+}
+
+// ============================================================
+// 宿泊希望の管理（締切設定・回答状況の確認）
+// ============================================================
+async function renderLodgingTab() {
+  const { data: settings } = await sb.from("lodging_settings").select("*").eq("id", 1).maybeSingle();
+
+  const { data: assignments } = await sb
+    .from("assignments")
+    .select("id, course_number, lodging_choice, students(attendance_number, name), slots(facility_name, department_name, facility_accommodation, accommodation)");
+
+  const lodgingRows = (assignments || []).filter(a => {
+    const acc = a.slots.facility_accommodation || a.slots.accommodation || "";
+    return acc.includes("○");
+  }).sort((a, b) => a.course_number - b.course_number || a.students.attendance_number - b.students.attendance_number);
+
+  const choiceLabel = { yes: "宿泊する", no: "宿泊しない" };
+  const rows = lodgingRows.map(a => `
+    <tr>
+      <td>${a.students.attendance_number} ${esc(a.students.name)}</td>
+      <td>${window.COURSE_LABELS[a.course_number-1]}</td>
+      <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td>
+      <td>${a.lodging_choice ? choiceLabel[a.lodging_choice] : '<span style="color:#b3413a;">未回答</span>'}</td>
+    </tr>
+  `).join("");
+
+  const answeredCount = lodgingRows.filter(a => a.lodging_choice).length;
+
+  document.getElementById("tab-content").innerHTML = `
+    <div class="card">
+      <b>宿泊するかどうかの回答締切</b>
+      <p class="small-muted">宿泊が必要な施設に確定した学生全員に、締切とともに表示されます。</p>
+      <div style="margin:10px 0;">
+        <input type="datetime-local" id="lodging-deadline" value="${settings && settings.deadline ? toLocalInputValue(settings.deadline) : ''}" />
+      </div>
+      <button id="save-lodging-deadline">締切を保存</button>
+      <div id="lodging-save-result" class="small-muted" style="margin-top:8px;"></div>
+    </div>
+    <div class="card">
+      <div class="flex-between">
+        <b>回答状況</b>
+        <span class="small-muted">回答済み ${answeredCount} / ${lodgingRows.length}</span>
+      </div>
+      <table class="slots" style="margin-top:10px;">
+        <thead><tr><th>学生</th><th>クール</th><th>実習先</th><th>回答</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="small-muted">宿泊が必要な確定枠はまだありません</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById("save-lodging-deadline").onclick = async () => {
+    const val = document.getElementById("lodging-deadline").value;
+    const resultEl = document.getElementById("lodging-save-result");
+    const { error } = await sb.from("lodging_settings").upsert({ id: 1, deadline: val ? new Date(val).toISOString() : null });
+    resultEl.textContent = error ? "保存に失敗しました: " + error.message : "保存しました。";
+    if (!error) renderLodgingTab();
+  };
+}
+
+function toLocalInputValue(iso) {
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 async function renderStudentsTab() {

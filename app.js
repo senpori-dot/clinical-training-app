@@ -367,10 +367,12 @@ async function main() {
 
   const { data: assignments } = await sb
     .from("assignments")
-    .select("course_number, slot_id, count_exempt, slots(institution_type, category, facility_name, department_name)")
+    .select("id, course_number, slot_id, count_exempt, lodging_choice, slots(institution_type, category, facility_name, department_name, facility_accommodation, accommodation)")
     .eq("student_id", student.id);
 
-  renderApp(student, round, assignments || []);
+  const { data: lodgingSettings } = await sb.from("lodging_settings").select("*").eq("id", 1).maybeSingle();
+
+  renderApp(student, round, assignments || [], lodgingSettings);
 }
 
 function computeState(assignments) {
@@ -392,7 +394,27 @@ function computeState(assignments) {
   return { counts, instCounts, catCounts, filledCourses };
 }
 
-async function renderApp(student, round, assignments) {
+function attachLodgingHandlers() {
+  document.querySelectorAll(".lodging-btn").forEach(btn => {
+    btn.onclick = async () => {
+      const id = btn.dataset.id;
+      const choice = btn.dataset.choice;
+      const label = choice === "yes" ? "宿泊する" : "宿泊しない";
+      if (!confirm(`「${label}」で回答します。よろしいですか？`)) return;
+      await sb.from("assignments").update({ lodging_choice: choice }).eq("id", id);
+      location.reload();
+    };
+  });
+  document.querySelectorAll(".lodging-change-btn").forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm("回答を変更しますか？")) return;
+      await sb.from("assignments").update({ lodging_choice: null }).eq("id", btn.dataset.id);
+      location.reload();
+    };
+  });
+}
+
+async function renderApp(student, round, assignments, lodgingSettings) {
   const { counts, instCounts, catCounts, filledCourses } = computeState(assignments);
   const allDone = filledCourses.size >= 6;
   const feasible = feasiblePatterns(counts);
@@ -431,9 +453,40 @@ async function renderApp(student, round, assignments) {
     html += `</tbody></table></div>`;
   }
 
+  // 宿泊が必要な確定先について、宿泊するかどうかの回答を求める
+  const lodgingNeeded = assignments.filter(a => requiresLodging(a.slots));
+  if (lodgingNeeded.length > 0) {
+    const deadline = lodgingSettings && lodgingSettings.deadline;
+    const deadlinePassed = deadline && Date.now() > new Date(deadline).getTime();
+    html += `<div class="card">
+      <b class="panel-heading">宿泊するかどうかの回答</b>
+      ${deadline ? `<div class="small-muted" style="margin-top:4px;">回答期限: ${fmtDate(deadline)}${deadlinePassed ? '（期限を過ぎています。至急ご回答ください）' : ''}</div>` : `<div class="small-muted" style="margin-top:4px;">回答期限は未設定です。決まり次第お知らせします。</div>`}
+      <table class="slots" style="margin-top:8px;">
+        <thead><tr><th>クール</th><th>実習先</th><th>回答</th></tr></thead>
+        <tbody>
+          ${lodgingNeeded.map(a => `
+            <tr>
+              <td>${window.COURSE_LABELS[a.course_number-1]}</td>
+              <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td>
+              <td>
+                ${a.lodging_choice
+                  ? `<span class="${a.lodging_choice === 'yes' ? 'me-confirmed' : ''}">${a.lodging_choice === 'yes' ? '✔ 宿泊する' : '宿泊しない'}</span>
+                     <button class="small secondary lodging-change-btn" data-id="${a.id}">変更</button>`
+                  : `<button class="small lodging-btn" data-id="${a.id}" data-choice="yes">宿泊する</button>
+                     <button class="small secondary lodging-btn" data-id="${a.id}" data-choice="no">宿泊しない</button>`
+                }
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  }
+
   if (allDone) {
     html += `<div class="notice confirmed">すべてのクールが確定しました。お疲れ様でした。</div>`;
     appEl.innerHTML = html;
+    attachLodgingHandlers();
     maybeShowResultReveal("all-done-" + student.id, "alldone", "6クールすべての実習先が決まりました。お疲れ様でした！");
     return;
   }
@@ -574,6 +627,7 @@ async function renderApp(student, round, assignments) {
   }
 
   appEl.innerHTML = html;
+  attachLodgingHandlers();
   if (resultAnimation) {
     maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
   }
