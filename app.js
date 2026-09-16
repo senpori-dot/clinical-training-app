@@ -612,6 +612,11 @@ async function renderApp(student, round, assignments) {
 
   const globalRevealed = noRound || !round.reveal_at || now >= new Date(round.reveal_at);
 
+  if (!noRound) {
+    const votedCount = new Set((roundPrefs || []).map(p => p.student_id)).size;
+    appEl.insertAdjacentHTML("beforeend", `<div class="card"><b>${votedCount}人</b><span class="small-muted"> が今のラウンドですでに希望を提出しています。</span></div>`);
+  }
+
   renderLegend(globalRevealed);
   renderFullGrid("internal", "院内", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
   renderFullGrid("external", "院外", slots, roundPrefs || [], allAssignments || [], student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
