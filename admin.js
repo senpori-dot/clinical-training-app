@@ -67,7 +67,8 @@ async function renderLodgingTab() {
 
   const lodgingRows = (assignments || []).filter(a => {
     const acc = a.slots.facility_accommodation || a.slots.accommodation || "";
-    return acc.includes("○");
+    const isKuroshio = a.slots.department_name.includes("黒潮医療人養成プロジェクト") || a.slots.facility_name.includes("黒潮医療人養成プロジェクト");
+    return acc.includes("○") && !isKuroshio;
   }).sort((a, b) => a.course_number - b.course_number || a.students.attendance_number - b.students.attendance_number);
 
   const choiceLabel = { yes: "宿泊する", no: "宿泊しない" };

@@ -454,7 +454,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
 
   // 宿泊が必要な確定先について、宿泊するかどうかの回答を求める
-  const lodgingNeeded = assignments.filter(a => requiresLodging(a.slots));
+  const lodgingNeeded = assignments.filter(a => requiresLodging(a.slots) && !a.slots.department_name.includes("黒潮医療人養成プロジェクト") && !a.slots.facility_name.includes("黒潮医療人養成プロジェクト"));
   if (lodgingNeeded.length > 0) {
     const deadline = lodgingSettings && lodgingSettings.deadline;
     const deadlinePassed = deadline && Date.now() > new Date(deadline).getTime();
