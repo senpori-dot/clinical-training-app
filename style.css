@@ -254,6 +254,18 @@ button:disabled { background: #b9c0bc; cursor: not-allowed; }
   display: inline-block;
 }
 
+.round-hero {
+  background: linear-gradient(135deg, var(--navy), #2e5c8a);
+  color: white;
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 4px 14px rgba(28,58,94,0.3);
+}
+.round-hero-title { font-size: 1.15rem; font-weight: 800; }
+.round-hero .countdown-box { background: rgba(255,255,255,0.18); color: white; }
+.round-hero .small-muted { color: #cfe0f0; }
+
 .note-text {
   font-size: 0.78rem;
   color: var(--muted);

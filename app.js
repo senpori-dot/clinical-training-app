@@ -423,10 +423,39 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   const { counts, instCounts, catCounts, filledCourses } = computeState(assignments);
   const allDone = filledCourses.size >= 6;
   const feasible = feasiblePatterns(counts);
+  const now = new Date();
+  const noRound = !round;
 
   let html = "";
 
-  // 宿泊が必要な確定先について、宿泊するかどうかの回答を求める（未回答があると分かりやすいよう、一番上に表示）
+  // 現在のラウンドの状態・締切カウントダウンを、目立つ色で一番上に表示
+  const notStarted0 = !noRound && round.start_at && now < new Date(round.start_at);
+  const firstEnded0 = !noRound && round.end_at && now > new Date(round.end_at);
+  const secondEnded0 = !noRound && round.second_deadline && now > new Date(round.second_deadline);
+  const thirdEnded0 = !noRound && round.third_deadline && now > new Date(round.third_deadline);
+
+  let countdownTarget = null, countdownLabel = "";
+  if (!noRound && notStarted0) { countdownTarget = round.start_at; countdownLabel = "開始まで"; }
+  else if (!noRound && round.phase === "first_choice" && !firstEnded0 && round.end_at) { countdownTarget = round.end_at; countdownLabel = "1次締切まで"; }
+  else if (!noRound && round.phase === "second_match" && !secondEnded0 && round.second_deadline) { countdownTarget = round.second_deadline; countdownLabel = "2次締切まで"; }
+  else if (!noRound && round.phase === "third_match" && !thirdEnded0 && round.third_deadline) { countdownTarget = round.third_deadline; countdownLabel = "3次締切まで"; }
+
+  const phaseWordMap = { first_choice: "1次希望 受付中", first_choice_processing: "1次 抽選処理中", second_match: "2次マッチング 開催中", second_match_processing: "2次 抽選処理中", third_match: "3次マッチング 開催中", third_match_processing: "3次 抽選処理中", closed: "このラウンドは終了" };
+
+  if (!noRound) {
+    html += `<div class="round-hero">
+      <div class="round-hero-title">第${round.round_number}希望 － ${notStarted0 ? "開始前" : (phaseWordMap[round.phase] || round.phase)}</div>
+      ${countdownTarget ? `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>` : (!notStarted0 && (round.phase === "closed" || (round.phase === "second_match" && secondEnded0) || (round.phase === "third_match" && thirdEnded0) || (round.phase === "first_choice" && firstEnded0)) ? `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>` : "")}
+      <div class="small-muted" style="margin-top:6px;">
+        開始: ${round.start_at ? fmtDate(round.start_at) : "-"}　
+        1次締切: ${round.end_at ? fmtDate(round.end_at) : "-"}　
+        2次締切: ${round.second_deadline ? fmtDate(round.second_deadline) : "-"}
+        ${round.third_deadline ? `　3次締切: ${fmtDate(round.third_deadline)}` : ""}
+      </div>
+    </div>`;
+  }
+
+  // 宿泊が必要な確定先について、宿泊するかどうかの回答を求める（未回答があると分かりやすいよう、上部に表示）
   const lodgingNeeded = assignments.filter(a => requiresLodging(a.slots) && !a.slots.department_name.includes("黒潮医療人養成プロジェクト") && !a.slots.facility_name.includes("黒潮医療人養成プロジェクト"));
   if (lodgingNeeded.length > 0) {
     const deadline = lodgingSettings && lodgingSettings.deadline;
@@ -497,33 +526,8 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     return;
   }
 
-  const now = new Date();
-  const noRound = !round;
-
   if (noRound) {
     html += `<div class="notice info">現在、募集中のラウンドはありません。事務局からの案内をお待ちください（下の表は閲覧のみです）。</div>`;
-  }
-
-  const notStarted0 = !noRound && round.start_at && now < new Date(round.start_at);
-  const firstEnded0 = !noRound && round.end_at && now > new Date(round.end_at);
-  const secondEnded0 = !noRound && round.second_deadline && now > new Date(round.second_deadline);
-
-  let countdownTarget = null, countdownLabel = "";
-  if (!noRound && notStarted0) { countdownTarget = round.start_at; countdownLabel = "開始まで"; }
-  else if (!noRound && round.phase === "first_choice" && !firstEnded0 && round.end_at) { countdownTarget = round.end_at; countdownLabel = "1次締切まで"; }
-  else if (!noRound && round.phase === "second_match" && !secondEnded0 && round.second_deadline) { countdownTarget = round.second_deadline; countdownLabel = "2次締切まで"; }
-
-  if (!noRound) {
-    html += `<div class="card"><b>現在のラウンド：第${round.round_number}希望</b>`;
-    if (round.start_at) html += `<div class="small-muted">開始: ${fmtDate(round.start_at)}</div>`;
-    if (round.end_at) html += `<div class="small-muted">1次締切: ${fmtDate(round.end_at)}</div>`;
-    if (round.second_deadline) html += `<div class="small-muted">2次締切: ${fmtDate(round.second_deadline)}</div>`;
-    if (countdownTarget) {
-      html += `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>`;
-    } else if (!notStarted0 && (round.phase === "closed" || (round.phase === "second_match" && secondEnded0) || (round.phase === "first_choice" && firstEnded0))) {
-      html += `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>`;
-    }
-    html += `</div>`;
   }
 
   const notStarted = notStarted0 || noRound;
@@ -587,7 +591,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   if (myPref && myPref.status === "confirmed") {
     canEdit = false;
     const wonLottery = myPref.won_lottery === true;
-    const lodgingNote = needsLodgingReminder(myPref.slots) ? "\n\nこの施設は宿泊が必要です。画面下の「宿泊するかどうかの回答」から回答をお願いします。" : "";
+    const lodgingNote = needsLodgingReminder(myPref.slots) ? "\n\nこの施設は宿泊が必要です。画面上の「宿泊するかどうかの回答」から回答をお願いします。" : "";
     const roundWord = attempt === 1 ? "" : `${attemptLabel[attempt]}希望で`;
     statusNotice = `<div class="notice success">🎉 おめでとうございます！${roundWord}${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。${lodgingNote ? `<br/><b>${esc(lodgingNote.trim())}</b>` : ""}</div>`;
     resultAnimation = wonLottery ? "win" : "smooth";
