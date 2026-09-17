@@ -13,6 +13,8 @@ window.tryRunLotteryIfDue = async function (sb, round) {
     phaseToProcess = "first_choice";
   } else if (round.phase === "second_match" && round.second_deadline && now > new Date(round.second_deadline)) {
     phaseToProcess = "second_match";
+  } else if (round.phase === "third_match" && round.third_deadline && now > new Date(round.third_deadline)) {
+    phaseToProcess = "third_match";
   }
   if (!phaseToProcess) return round;
 
@@ -38,7 +40,7 @@ window.tryRunLotteryIfDue = async function (sb, round) {
 // 実際の抽選処理本体：(実習先, クール)ごと、かつ施設全体の人数上限も考慮したグローバル抽選
 // ※ 他のラウンドで既に確定している人数もベースとして考慮し、定員を絶対に超えないようにする
 window.runLotteryCore = async function (sb, round, phaseToProcess) {
-  const attempt = phaseToProcess === "second_match" ? 2 : 1;
+  const attempt = phaseToProcess === "third_match" ? 3 : phaseToProcess === "second_match" ? 2 : 1;
 
   const { data: prefs, error: prefsErr } = await sb
     .from("preferences")
@@ -125,6 +127,83 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
     : "closed";
 
   await sb.from("rounds").update({ phase: nextPhase }).eq("id", round.id);
+
+  // 南和歌山医療センター：宿泊施設の部屋割り（1人部屋2室＋4人部屋1室・同性のみ）の都合上、
+  // 施設全体6名が「男女3:3」になると4人部屋を同性で埋められず部屋割りが破綻するため、
+  // 今回のラウンドで新たに確定が発生した(施設,クール)についてのみ、3:3を避ける調整を行う。
+  const touchedFacilityCourses = new Set();
+  for (const p of shuffled) {
+    const slot = slotMap[p.slot_id];
+    if (slot && slot.facility_name.includes("南和歌山医療")) {
+      touchedFacilityCourses.add(slot.facility_name + "_" + p.course_number);
+    }
+  }
+
+  if (touchedFacilityCourses.size > 0) {
+    const { data: genderStudents } = await sb.from("students").select("id, gender");
+    const genderMap = {};
+    (genderStudents || []).forEach(s => { genderMap[s.id] = s.gender; });
+
+    for (const key of touchedFacilityCourses) {
+      const lastUnderscoreIdx = key.lastIndexOf("_");
+      const fname = key.slice(0, lastUnderscoreIdx);
+      const courseNumber = Number(key.slice(lastUnderscoreIdx + 1));
+
+      const { data: confirmedNow } = await sb
+        .from("assignments")
+        .select("id, student_id, slot_id")
+        .eq("course_number", courseNumber)
+        .in("slot_id", (allSlots || []).filter(s => s.facility_name === fname).map(s => s.id));
+
+      const list = confirmedNow || [];
+      if (list.length !== 6) continue; // 6名ちょうどの時だけ判定対象（部屋割りの前提が6名のため）
+
+      const males = list.filter(a => genderMap[a.student_id] === "male");
+      const females = list.filter(a => genderMap[a.student_id] === "female");
+      if (males.length !== 3 || females.length !== 3) continue; // 3:3以外は問題なし
+
+      // 3:3を崩すため、このラウンドで「lost」になった同施設・同クール希望者から
+      // 逆側の性別の候補を探し、確定者1名と入れ替える
+      const { data: lostCandidates } = await sb
+        .from("preferences")
+        .select("id, student_id, slot_id")
+        .eq("round_id", round.id)
+        .eq("attempt", attempt)
+        .eq("course_number", courseNumber)
+        .eq("status", "lost")
+        .in("slot_id", (allSlots || []).filter(s => s.facility_name === fname).map(s => s.id));
+
+      let swapped = false;
+      for (const genderToAdd of ["female", "male"]) {
+        const candidate = (lostCandidates || []).find(c => genderMap[c.student_id] === genderToAdd);
+        if (!candidate) continue;
+        const genderToRemove = genderToAdd === "female" ? "male" : "female";
+        const removeTarget = list.find(a => genderMap[a.student_id] === genderToRemove);
+        if (!removeTarget) continue;
+
+        await sb.from("assignments").delete().eq("id", removeTarget.id);
+        await sb.from("preferences")
+          .update({ status: "lost", won_lottery: false })
+          .eq("student_id", removeTarget.student_id)
+          .eq("round_id", round.id)
+          .eq("attempt", attempt);
+
+        await sb.from("assignments").upsert(
+          { student_id: candidate.student_id, course_number: courseNumber, slot_id: candidate.slot_id },
+          { onConflict: "student_id,course_number" }
+        );
+        await sb.from("preferences")
+          .update({ status: "confirmed", won_lottery: true })
+          .eq("id", candidate.id);
+
+        swapped = true;
+        break;
+      }
+      if (!swapped) {
+        console.warn("南和歌山医療センター: 3:3を回避できませんでした（代替候補なし）", fname, courseNumber);
+      }
+    }
+  }
 
   return { confirmedCount, lostCount, nextPhase };
 };

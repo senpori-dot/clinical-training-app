@@ -173,10 +173,14 @@ async function renderRoundsTab() {
       <td class="small-muted">
         開始:${r.start_at ? new Date(r.start_at).toLocaleString("ja-JP") : "-"}<br/>
         1次締切:${r.end_at ? new Date(r.end_at).toLocaleString("ja-JP") : "-"}<br/>
-        2次締切:${r.second_deadline ? new Date(r.second_deadline).toLocaleString("ja-JP") : "-"}
+        2次締切:${r.second_deadline ? new Date(r.second_deadline).toLocaleString("ja-JP") : "-"}<br/>
+        ${r.third_deadline ? `3次締切:${new Date(r.third_deadline).toLocaleString("ja-JP")}` : ""}
       </td>
       <td>${r.is_current ? "★現在" : ""}</td>
-      <td>${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在にする</button>` : ""}</td>
+      <td>
+        ${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在にする</button>` : ""}
+        ${r.phase === "closed" && !r.third_deadline ? `<button class="small secondary start-third" data-id="${r.id}">3次マッチングを追加</button>` : ""}
+      </td>
     </tr>`).join("");
 
   const nextRoundNumber = rounds && rounds.length ? Math.max(...rounds.map(r=>r.round_number)) + 1 : 1;
@@ -215,6 +219,25 @@ async function renderRoundsTab() {
     b.onclick = async () => {
       await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
       await sb.from("rounds").update({ is_current: true }).eq("id", b.dataset.id);
+      renderRoundsTab();
+    };
+  });
+
+  document.querySelectorAll(".start-third").forEach(b => {
+    b.onclick = async () => {
+      const { count } = await sb
+        .from("preferences")
+        .select("student_id", { count: "exact", head: true })
+        .eq("round_id", b.dataset.id)
+        .eq("attempt", 2)
+        .eq("status", "lost");
+      const val = prompt(`このラウンドで2次マッチングにも外れた学生が${count || 0}人います。3次マッチングの締切日時を「YYYY-MM-DDTHH:MM」の形式で入力してください（例: 2026-09-30T12:00）`);
+      if (!val) return;
+      const iso = new Date(val).toISOString();
+      if (isNaN(new Date(val).getTime())) { alert("日時の形式が正しくありません。"); return; }
+      await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
+      await sb.from("rounds").update({ phase: "third_match", third_deadline: iso, is_current: true }).eq("id", b.dataset.id);
+      alert("3次マッチングを開始しました。対象の学生（2次マッチングで外れた学生）は、空いている枠から改めて希望を出せます。");
       renderRoundsTab();
     };
   });
