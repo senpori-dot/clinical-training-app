@@ -813,7 +813,8 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
       : "";
     const isKuroshioRow = s.department_name.includes("黒潮医療人養成プロジェクト") || s.facility_name.includes("黒潮医療人養成プロジェクト");
     const lodgingBadge = (!isKuroshioRow && requiresLodging(s)) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
-    rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}</td>`;
+    const dormBadge = s.facility_name.includes("南和歌山医療") ? `<div class="lodging-badge">🏨 宿舎:1人部屋2室+4人部屋1室(計6人まで／病院全体の人数上限ではありません)</div>` : "";
+    rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}${dormBadge}</td>`;
     for (let c = 1; c <= 6; c++) {
       rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
     }
