@@ -399,6 +399,24 @@ function computeState(assignments) {
   return { counts, instCounts, catCounts, filledCourses };
 }
 
+function attachCancelHandler(student) {
+  const btn = document.getElementById("cancel-confirmed-btn");
+  if (!btn) return;
+  btn.onclick = async () => {
+    if (!confirm("本当にこの枠をキャンセルしますか？\n\n押すと元に戻せません。キャンセルすると2次マッチングで改めて選び直すことになります。")) return;
+    if (!confirm("最終確認です。キャンセルを実行してよろしいですか？（この操作は取り消せません）")) return;
+    const prefId = btn.dataset.prefId;
+    const courseNumber = Number(btn.dataset.course);
+    const { error: e1 } = await sb.from("preferences").update({ status: "lost", cancelled: true, won_lottery: false }).eq("id", prefId);
+    const { error: e2 } = await sb.from("assignments").delete().eq("student_id", student.id).eq("course_number", courseNumber);
+    if (e1 || e2) {
+      alert("キャンセル処理に失敗しました。もう一度お試しいただくか、学年代表にご連絡ください。");
+      return;
+    }
+    location.reload();
+  };
+}
+
 function attachLodgingHandlers() {
   document.querySelectorAll(".lodging-btn").forEach(btn => {
     btn.onclick = async () => {
@@ -534,6 +552,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     html += `<div class="notice confirmed">すべてのクールが確定しました。お疲れ様でした。</div>`;
     appEl.innerHTML = html;
     attachLodgingHandlers();
+    attachCancelHandler(student);
     maybeShowResultReveal("all-done-" + student.id, "alldone", "6クールすべての実習先が決まりました。お疲れ様でした！");
     return;
   }
@@ -609,6 +628,21 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     resultAnimation = wonLottery ? "win" : "smooth";
     resultPrefId = myPref.id;
     resultDetailText = `${window.COURSE_LABELS[myPref.course_number-1]} ${myPref.slots.facility_name} ${myPref.slots.department_name}${lodgingNote}`;
+
+    // 1次マッチング確定後のキャンセル受付（設定されている時間内のみ、1ラウンド1回だけ）
+    if (attempt === 1 && !myPref.cancelled && round.cancel_window_start && round.cancel_window_end) {
+      const cwStart = new Date(round.cancel_window_start).getTime();
+      const cwEnd = new Date(round.cancel_window_end).getTime();
+      if (Date.now() >= cwStart && Date.now() <= cwEnd) {
+        statusNotice += `<div class="card" style="border:2px solid #b3413a;">
+          <b style="color:#b3413a;">この枠をキャンセルできます</b>
+          <p class="small-muted">キャンセルすると、この確定は取り消され、2次マッチングで空いている枠から改めて選び直せます。キャンセルできるのは1ラウンドにつき1回だけで、<b>押すと取り消しはできません。</b></p>
+          <button class="secondary" id="cancel-confirmed-btn" data-pref-id="${myPref.id}" data-course="${myPref.course_number}">この枠をキャンセルする（取り消し不可）</button>
+        </div>`;
+      } else if (Date.now() < cwStart) {
+        statusNotice += `<div class="small-muted" style="margin-top:6px;">キャンセル受付は ${fmtDate(round.cancel_window_start)} から ${fmtDate(round.cancel_window_end)} までです。</div>`;
+      }
+    }
   } else if (myPref && myPref.status === "lost" && attempt === maxOfferedAttempt && openAttempt !== attempt + 1) {
     // 用意されている最後の回でも外れた＝このラウンドでは最終的に枠を獲得できなかった
     const finalMsg = `${attemptLabel[attempt]}マッチングでも抽選に外れ、このラウンドでは枠を獲得することができませんでした。次のラウンドが始まるまでに学年代表までご連絡いただければ、その枠が空いていれば対応可能です。`;
@@ -674,6 +708,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   appEl.innerHTML = html;
   attachLodgingHandlers();
+  attachCancelHandler(student);
   if (resultAnimation) {
     maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
   }
@@ -714,24 +749,27 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   if (!noRound) {
     const votedCount = new Set((roundPrefs || []).map(p => p.student_id)).size;
-    let targetCount = null;
-    if (displayAttempt === 1) {
-      const { data: allStudents } = await sb.from("students").select("id");
-      const { data: myAssignCounts } = await sb.from("assignments").select("student_id");
-      const cnt = {};
-      (myAssignCounts || []).forEach(a => { cnt[a.student_id] = (cnt[a.student_id] || 0) + 1; });
-      const totalStudents = (allStudents || []).length;
-      const doneCount = (allStudents || []).filter(s => (cnt[s.id] || 0) >= 6).length;
-      targetCount = totalStudents - doneCount;
-    } else {
-      const { data: lostPrev } = await sb
+
+    const { data: allStudents } = await sb.from("students").select("id");
+    const { data: myAssignCounts } = await sb.from("assignments").select("student_id");
+    const cnt = {};
+    (myAssignCounts || []).forEach(a => { cnt[a.student_id] = (cnt[a.student_id] || 0) + 1; });
+    const totalStudents = (allStudents || []).length;
+    const doneCount = (allStudents || []).filter(s => (cnt[s.id] || 0) >= 6).length;
+    let targetCount = totalStudents - doneCount; // このラウンド開始時点で参加すべきだった人数
+
+    // 2次・3次では、前の回で「確定した人」を毎回差し引く。
+    // 落選した人だけでなく、投票し忘れた人・キャンセルした人も自動的に対象人数に残る。
+    for (let a = 1; a < displayAttempt; a++) {
+      const { data: confirmedAtA } = await sb
         .from("preferences")
         .select("student_id")
         .eq("round_id", round.id)
-        .eq("attempt", displayAttempt - 1)
-        .eq("status", "lost");
-      targetCount = new Set((lostPrev || []).map(p => p.student_id)).size;
+        .eq("attempt", a)
+        .eq("status", "confirmed");
+      targetCount -= new Set((confirmedAtA || []).map(p => p.student_id)).size;
     }
+
     const attemptWord = displayAttempt === 1 ? "1次" : displayAttempt === 2 ? "2次" : "3次";
     appEl.insertAdjacentHTML("beforeend", `<div class="card"><b>${votedCount}/${targetCount}人</b><span class="small-muted"> が${attemptWord}マッチングの対象者のうち、すでに希望を提出しています。</span></div>`);
   }
