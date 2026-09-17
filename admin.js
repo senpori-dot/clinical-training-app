@@ -164,6 +164,11 @@ async function renderStudentsTab() {
 // ============================================================
 // ラウンド管理（タームを1つ指定して、全員でそのタームを決めるラウンド）
 // ============================================================
+function toLocalInputValueOrEmpty(iso) {
+  if (!iso) return "";
+  return toLocalInputValue(iso);
+}
+
 async function renderRoundsTab() {
   const { data: rounds } = await sb.from("rounds").select("*").order("round_number");
 
@@ -176,13 +181,18 @@ async function renderRoundsTab() {
         1次締切:${r.end_at ? new Date(r.end_at).toLocaleString("ja-JP") : "-"}<br/>
         2次締切:${r.second_deadline ? new Date(r.second_deadline).toLocaleString("ja-JP") : "-"}<br/>
         ${r.third_deadline ? `3次締切:${new Date(r.third_deadline).toLocaleString("ja-JP")}<br/>` : ""}
-        ${r.cancel_window_start || r.cancel_window_end ? `キャンセル受付:${r.cancel_window_start ? new Date(r.cancel_window_start).toLocaleString("ja-JP") : "?"}〜${r.cancel_window_end ? new Date(r.cancel_window_end).toLocaleString("ja-JP") : "?"}` : ""}
       </td>
       <td>${r.is_current ? "★現在" : ""}</td>
       <td>
         ${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在にする</button>` : ""}
         ${r.phase === "closed" && !r.third_deadline ? `<button class="small secondary start-third" data-id="${r.id}">3次マッチングを追加</button>` : ""}
-        <button class="small secondary edit-cancel-window" data-id="${r.id}" data-start="${r.cancel_window_start || ''}" data-end="${r.cancel_window_end || ''}">キャンセル受付時間を設定</button>
+        <div style="margin-top:6px;">
+          <label class="small-muted">キャンセル受付 開始</label>
+          <input type="datetime-local" class="cancel-start-input" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.cancel_window_start)}" />
+          <label class="small-muted">終了</label>
+          <input type="datetime-local" class="cancel-end-input" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.cancel_window_end)}" />
+          <button class="small save-cancel-window" data-id="${r.id}">保存</button>
+        </div>
       </td>
     </tr>`).join("");
 
@@ -250,22 +260,15 @@ async function renderRoundsTab() {
     };
   });
 
-  document.querySelectorAll(".edit-cancel-window").forEach(b => {
+  document.querySelectorAll(".save-cancel-window").forEach(b => {
     b.onclick = async () => {
-      const curStart = b.dataset.start ? new Date(b.dataset.start).toLocaleString("ja-JP") : "未設定";
-      const curEnd = b.dataset.end ? new Date(b.dataset.end).toLocaleString("ja-JP") : "未設定";
-      const startVal = prompt(`キャンセル受付の開始日時を「YYYY-MM-DDTHH:MM」で入力してください（例: 2026-09-18T08:00）\n現在の設定: ${curStart}`);
-      if (startVal === null) return;
-      const endVal = prompt(`キャンセル受付の終了日時を「YYYY-MM-DDTHH:MM」で入力してください（例: 2026-09-18T12:00）\n現在の設定: ${curEnd}`);
-      if (endVal === null) return;
-      const startIso = startVal ? new Date(startVal).toISOString() : null;
-      const endIso = endVal ? new Date(endVal).toISOString() : null;
-      if ((startVal && isNaN(new Date(startVal).getTime())) || (endVal && isNaN(new Date(endVal).getTime()))) {
-        alert("日時の形式が正しくありません。");
-        return;
-      }
-      await sb.from("rounds").update({ cancel_window_start: startIso, cancel_window_end: endIso }).eq("id", b.dataset.id);
-      alert("キャンセル受付時間を設定しました。");
+      const id = b.dataset.id;
+      const startInput = document.querySelector(`.cancel-start-input[data-id="${id}"]`);
+      const endInput = document.querySelector(`.cancel-end-input[data-id="${id}"]`);
+      const startIso = startInput.value ? new Date(startInput.value).toISOString() : null;
+      const endIso = endInput.value ? new Date(endInput.value).toISOString() : null;
+      await sb.from("rounds").update({ cancel_window_start: startIso, cancel_window_end: endIso }).eq("id", id);
+      alert("キャンセル受付時間を保存しました。");
       renderRoundsTab();
     };
   });
