@@ -340,6 +340,8 @@ td.col-active { box-shadow: inset 0 0 0 2px #2e7d6b; }
 .cell-names { font-size: 0.62rem; color: var(--muted); line-height: 1.2; }
 .cell-names b { color: var(--navy); }
 .me-confirmed { color: #1e6b3a; font-weight: 800; background: #d9f0e0; padding: 1px 4px; border-radius: 4px; }
+.lodging-badge-answered { display: inline-block; color: #1e6b3a; font-weight: 700; background: #d9f0e0; padding: 3px 8px; border-radius: 6px; margin-bottom: 4px; }
+.lodging-badge-unanswered { display: inline-block; color: #b3413a; font-weight: 700; background: #fbdede; padding: 3px 8px; border-radius: 6px; margin-bottom: 4px; }
 
 table.pref-grid tbody tr.facility-start td { border-top: 3px solid var(--navy); }
 

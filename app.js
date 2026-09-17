@@ -26,6 +26,11 @@ function requiresLodging(slot) {
   return acc.includes("○");
 }
 
+function needsLodgingReminder(slot) {
+  const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
+  return requiresLodging(slot) && !isKuroshio;
+}
+
 function ensureRefreshButton() {
   if (document.getElementById("refresh-fab")) return;
   const btn = document.createElement("button");
@@ -470,9 +475,10 @@ async function renderApp(student, round, assignments, lodgingSettings) {
               <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td>
               <td>
                 ${a.lodging_choice
-                  ? `<span class="${a.lodging_choice === 'yes' ? 'me-confirmed' : ''}">${a.lodging_choice === 'yes' ? '✔ 宿泊する' : '宿泊しない'}</span>
+                  ? `<span class="lodging-badge-answered">✔ ${a.lodging_choice === 'yes' ? '宿泊する' : '宿泊しない'}</span>
                      <button class="small secondary lodging-change-btn" data-id="${a.id}">変更</button>`
-                  : `<button class="small lodging-btn" data-id="${a.id}" data-choice="yes">宿泊する</button>
+                  : `<span class="lodging-badge-unanswered">未回答</span><br/>
+                     <button class="small lodging-btn" data-id="${a.id}" data-choice="yes">宿泊する</button>
                      <button class="small secondary lodging-btn" data-id="${a.id}" data-choice="no">宿泊しない</button>`
                 }
               </td>
@@ -550,22 +556,47 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     attempt = 1;
     canEdit = false;
     const wonLottery = pref1.won_lottery === true;
-    statusNotice = `<div class="notice success">🎉 おめでとうございます！${window.COURSE_LABELS[pref1.course_number-1]}「${esc(pref1.slots.facility_name)} ${esc(pref1.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
+    const lodgingNote1 = needsLodgingReminder(pref1.slots) ? "\n\nこの施設は宿泊が必要です。画面下の「宿泊するかどうかの回答」から回答をお願いします。" : "";
+    statusNotice = `<div class="notice success">🎉 おめでとうございます！${window.COURSE_LABELS[pref1.course_number-1]}「${esc(pref1.slots.facility_name)} ${esc(pref1.slots.department_name)}」に確定しました。次のラウンドをお待ちください。${lodgingNote1 ? `<br/><b>${esc(lodgingNote1.trim())}</b>` : ""}</div>`;
     resultAnimation = wonLottery ? "win" : "smooth";
     resultPrefId = pref1.id;
-    resultDetailText = `${window.COURSE_LABELS[pref1.course_number-1]} ${pref1.slots.facility_name} ${pref1.slots.department_name}`;
+    resultDetailText = `${window.COURSE_LABELS[pref1.course_number-1]} ${pref1.slots.facility_name} ${pref1.slots.department_name}${lodgingNote1}`;
   } else {
-    attempt = round.phase === "second_match" ? 2 : 1;
-    const { data: pref2 } = attempt === 2 ? await sb
+    const { data: pref2 } = await sb
       .from("preferences")
       .select("*, slots(facility_name, department_name, facility_accommodation, accommodation)")
       .eq("student_id", student.id)
       .eq("round_id", round.id)
       .eq("attempt", 2)
-      .maybeSingle() : { data: null };
-    myPref = attempt === 2 ? pref2 : pref1;
+      .maybeSingle();
 
-    if (round.phase === "closed") {
+    // attempt(1次/2次のどちらを見るか)は、round.phase だけでなく実際のデータ有無も見て決める。
+    // これにより、2次マッチング終了後にラウンドが closed になっても正しく2次の結果を表示できる。
+    if (pref2) {
+      attempt = 2;
+      myPref = pref2;
+    } else if (round.phase === "second_match") {
+      attempt = 2;
+      myPref = null;
+    } else {
+      attempt = 1;
+      myPref = pref1;
+    }
+
+    if (attempt === 2 && myPref && myPref.status === "confirmed") {
+      const wonLottery = myPref.won_lottery === true;
+      const lodgingNote2 = needsLodgingReminder(myPref.slots) ? "\n\nこの施設は宿泊が必要です。画面下の「宿泊するかどうかの回答」から回答をお願いします。" : "";
+      statusNotice = `<div class="notice success">🎉 おめでとうございます！2次希望で「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。${lodgingNote2 ? `<br/><b>${esc(lodgingNote2.trim())}</b>` : ""}</div>`;
+      resultAnimation = wonLottery ? "win" : "smooth";
+      resultPrefId = myPref.id;
+      resultDetailText = `${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}${lodgingNote2}`;
+    } else if (attempt === 2 && myPref && myPref.status === "lost") {
+      const finalMsg = "2次マッチングでも抽選に外れ、このラウンドでは枠を獲得することができませんでした。次のラウンドが始まるまでに学年代表までご連絡いただければ、その枠が空いていれば対応可能です。";
+      statusNotice = `<div class="notice warn">${finalMsg}</div>`;
+      resultAnimation = "lose-final";
+      resultPrefId = myPref.id;
+      resultDetailText = finalMsg;
+    } else if (round.phase === "closed") {
       statusNotice = `<div class="notice info">このラウンドは終了しました。次のラウンドをお待ちください。</div>`;
     } else if (round.phase === "first_choice" && firstEnded) {
       statusNotice = `<div class="notice info">1次締切時刻を過ぎました。まもなく自動で抽選が行われます。少し時間をおいて再読み込みしてください。</div>`;
@@ -582,29 +613,13 @@ async function renderApp(student, round, assignments, lodgingSettings) {
         resultDetailText = "1次マッチングに外れました。2次マッチングに進んでください。";
       }
     } else {
-      if (pref1 && pref1.status === "lost" && resultAnimation === "") {
-        resultAnimation = "lose-once";
-        resultPrefId = pref1.id;
-        resultDetailText = "1次マッチングに外れました。2次マッチングに進んでください。";
-      }
+      // attempt === 2、2次マッチングまだ進行中（確定/落選前）
       if (!myPref) {
         canEdit = true;
         statusNotice = `<div class="notice warn">1次マッチングに外れました。空いている枠から2次希望を選んでください。</div>`;
       } else if (myPref.status === "submitted") {
         canEdit = true;
         statusNotice = `<div class="notice confirmed">2次希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
-      } else if (myPref.status === "confirmed") {
-        const wonLottery = myPref.won_lottery === true;
-        statusNotice = `<div class="notice success">🎉 おめでとうございます！2次希望で「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。</div>`;
-        resultAnimation = wonLottery ? "win" : "smooth";
-        resultPrefId = myPref.id;
-        resultDetailText = `${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}`;
-      } else {
-        const finalMsg = "2次希望も抽選に外れました。もし希望する枠があれば、すぐに坂本まで希望の枠をご連絡ください。次のラウンドが始まる前であれば受け付けます。それ以降になった場合は、全クールが確定した後、余っている枠の中から改めて希望を聞きます。";
-        statusNotice = `<div class="notice warn">${finalMsg}</div>`;
-        resultAnimation = "lose-final";
-        resultPrefId = myPref.id;
-        resultDetailText = finalMsg;
       }
     }
   }

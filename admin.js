@@ -77,7 +77,7 @@ async function renderLodgingTab() {
       <td>${a.students.attendance_number} ${esc(a.students.name)}</td>
       <td>${window.COURSE_LABELS[a.course_number-1]}</td>
       <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td>
-      <td>${a.lodging_choice ? choiceLabel[a.lodging_choice] : '<span style="color:#b3413a;">未回答</span>'}</td>
+      <td>${a.lodging_choice ? `<span class="lodging-badge-answered">${choiceLabel[a.lodging_choice]}</span>` : '<span class="lodging-badge-unanswered">未回答</span>'}</td>
     </tr>
   `).join("");
 
