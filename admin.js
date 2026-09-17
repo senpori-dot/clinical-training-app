@@ -87,6 +87,7 @@ async function renderLodgingTab() {
     <div class="card">
       <b>宿泊するかどうかの回答締切</b>
       <p class="small-muted">宿泊が必要な施設に確定した学生全員に、締切とともに表示されます。</p>
+      <p class="small-muted">※南和歌山医療センターの院内宿舎は「1人部屋2室・4人部屋1室」の計6人まで（病院全体の受入人数の上限ではありません）。</p>
       <div style="margin:10px 0;">
         <input type="datetime-local" id="lodging-deadline" value="${settings && settings.deadline ? toLocalInputValue(settings.deadline) : ''}" />
       </div>
