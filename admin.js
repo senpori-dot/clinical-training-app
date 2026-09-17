@@ -303,7 +303,12 @@ async function renderMatchingTab() {
   const { data: allSlots } = await sb.from("slots").select("*").eq("active", true);
   const { data: allAssignments } = await sb
     .from("assignments")
-    .select("slot_id, course_number, students(attendance_number, name)");
+    .select("slot_id, course_number, lodging_choice, students(attendance_number, name)");
+
+  function requiresLodgingAdmin(slot) {
+    const acc = slot.facility_accommodation || slot.accommodation || "";
+    return acc.includes("○");
+  }
 
   function buildGrid(institutionType, label) {
     const list = (allSlots || [])
@@ -317,15 +322,22 @@ async function renderMatchingTab() {
       const facilityChanged = institutionType === "external" && s.facility_name !== prevFacility;
       prevFacility = s.facility_name;
       const rowClass = s.category === "internal_medicine" ? "row-naika" : "row-geka";
-      rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}</td>`;
+      const lodgingRow = requiresLodgingAdmin(s);
+      rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col"><b>${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${lodgingRow ? '<br/><span class="lodging-badge">🏨宿泊あり</span>' : ''}</td>`;
       for (let c = 1; c <= 6; c++) {
         const cap = s["cap_" + c];
         if (cap <= 0) { rows += `<td class="cell-slot cell-blocked">×</td>`; continue; }
         const confirmedHere = (allAssignments || []).filter(a => a.slot_id === s.id && a.course_number === c);
         const pendingHere = (prefs || []).filter(p => p.slot_id === s.id && p.course_number === c && p.status !== "confirmed");
         const total = confirmedHere.length + pendingHere.length;
+        const lodgingTag = (a) => {
+          if (!lodgingRow) return "";
+          if (a.lodging_choice === "yes") return ' <span class="lodging-badge-answered">宿泊する</span>';
+          if (a.lodging_choice === "no") return ' <span class="lodging-badge-answered">宿泊しない</span>';
+          return ' <span class="lodging-badge-unanswered">宿泊未回答</span>';
+        };
         const names = [
-          ...confirmedHere.map(a => `<b>${a.students.attendance_number} ${esc(a.students.name)}</b>`),
+          ...confirmedHere.map(a => `<b>${a.students.attendance_number} ${esc(a.students.name)}</b>${lodgingTag(a)}`),
           ...pendingHere.map(p => `${p.students.attendance_number} ${esc(p.students.name)}(${p.status})`),
         ].join("<br>");
         const overflowClass = total > cap ? "frame-over" : (total === cap ? "frame-exact" : "");
