@@ -426,6 +426,37 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   let html = "";
 
+  // 宿泊が必要な確定先について、宿泊するかどうかの回答を求める（未回答があると分かりやすいよう、一番上に表示）
+  const lodgingNeeded = assignments.filter(a => requiresLodging(a.slots) && !a.slots.department_name.includes("黒潮医療人養成プロジェクト") && !a.slots.facility_name.includes("黒潮医療人養成プロジェクト"));
+  if (lodgingNeeded.length > 0) {
+    const deadline = lodgingSettings && lodgingSettings.deadline;
+    const deadlinePassed = deadline && Date.now() > new Date(deadline).getTime();
+    html += `<div class="card">
+      <b class="panel-heading">宿泊するかどうかの回答</b>
+      ${deadline ? `<div class="small-muted" style="margin-top:4px;">回答期限: ${fmtDate(deadline)}${deadlinePassed ? '（期限を過ぎています。至急ご回答ください）' : ''}</div>` : `<div class="small-muted" style="margin-top:4px;">回答期限は未設定です。決まり次第お知らせします。</div>`}
+      <table class="slots" style="margin-top:8px;">
+        <thead><tr><th>クール</th><th>実習先</th><th>回答</th></tr></thead>
+        <tbody>
+          ${lodgingNeeded.map(a => `
+            <tr>
+              <td>${window.COURSE_LABELS[a.course_number-1]}</td>
+              <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td>
+              <td>
+                ${a.lodging_choice
+                  ? `<span class="lodging-badge-answered">✔ ${a.lodging_choice === 'yes' ? '宿泊する' : '宿泊しない'}</span>
+                     <button class="small secondary lodging-change-btn" data-id="${a.id}">変更</button>`
+                  : `<span class="lodging-badge-unanswered">未回答</span><br/>
+                     <button class="small lodging-btn" data-id="${a.id}" data-choice="yes">宿泊する</button>
+                     <button class="small secondary lodging-btn" data-id="${a.id}" data-choice="no">宿泊しない</button>`
+                }
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  }
+
   // ステータスパネル：6マスを埋める進捗として表示
   const hasExemptAbroad = assignments.some(a => a.count_exempt);
   html += `<div class="card">
@@ -456,37 +487,6 @@ async function renderApp(student, round, assignments, lodgingSettings) {
       html += `<tr><td>${window.COURSE_LABELS[a.course_number-1]}</td><td>${INSTITUTION_LABEL[a.slots.institution_type]}/${CATEGORY_LABEL[a.slots.category]}</td><td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td></tr>`;
     }
     html += `</tbody></table></div>`;
-  }
-
-  // 宿泊が必要な確定先について、宿泊するかどうかの回答を求める
-  const lodgingNeeded = assignments.filter(a => requiresLodging(a.slots) && !a.slots.department_name.includes("黒潮医療人養成プロジェクト") && !a.slots.facility_name.includes("黒潮医療人養成プロジェクト"));
-  if (lodgingNeeded.length > 0) {
-    const deadline = lodgingSettings && lodgingSettings.deadline;
-    const deadlinePassed = deadline && Date.now() > new Date(deadline).getTime();
-    html += `<div class="card">
-      <b class="panel-heading">宿泊するかどうかの回答</b>
-      ${deadline ? `<div class="small-muted" style="margin-top:4px;">回答期限: ${fmtDate(deadline)}${deadlinePassed ? '（期限を過ぎています。至急ご回答ください）' : ''}</div>` : `<div class="small-muted" style="margin-top:4px;">回答期限は未設定です。決まり次第お知らせします。</div>`}
-      <table class="slots" style="margin-top:8px;">
-        <thead><tr><th>クール</th><th>実習先</th><th>回答</th></tr></thead>
-        <tbody>
-          ${lodgingNeeded.map(a => `
-            <tr>
-              <td>${window.COURSE_LABELS[a.course_number-1]}</td>
-              <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td>
-              <td>
-                ${a.lodging_choice
-                  ? `<span class="lodging-badge-answered">✔ ${a.lodging_choice === 'yes' ? '宿泊する' : '宿泊しない'}</span>
-                     <button class="small secondary lodging-change-btn" data-id="${a.id}">変更</button>`
-                  : `<span class="lodging-badge-unanswered">未回答</span><br/>
-                     <button class="small lodging-btn" data-id="${a.id}" data-choice="yes">宿泊する</button>
-                     <button class="small secondary lodging-btn" data-id="${a.id}" data-choice="no">宿泊しない</button>`
-                }
-              </td>
-            </tr>
-          `).join("")}
-        </tbody>
-      </table>
-    </div>`;
   }
 
   if (allDone) {
@@ -623,6 +623,12 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     if (!myPref) {
       canEdit = true;
       statusNotice = `<div class="notice warn">${attemptLabel[attempt-1]}マッチングに外れました。空いている枠から${attemptLabel[attempt]}希望を選んでください。</div>`;
+      const prevPref = prefsByAttempt[attempt - 1];
+      if (prevPref && prevPref.status === "lost") {
+        resultAnimation = "lose";
+        resultPrefId = prevPref.id;
+        resultDetailText = `${attemptLabel[attempt-1]}マッチングに外れました。${attemptLabel[attempt]}マッチングに進んでください。`;
+      }
     } else if (myPref.status === "submitted") {
       canEdit = true;
       statusNotice = `<div class="notice confirmed">${attemptLabel[attempt]}希望として「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」を提出済みです。表をタップすると変更できます。</div>`;
