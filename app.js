@@ -442,10 +442,22 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   const phaseWordMap = { first_choice: "1次希望 受付中", first_choice_processing: "1次 抽選処理中", second_match: "2次マッチング 開催中", second_match_processing: "2次 抽選処理中", third_match: "3次マッチング 開催中", third_match_processing: "3次 抽選処理中", closed: "このラウンドは終了" };
 
+  // ラウンドが終了していて、次のラウンドの開始日時がもう入力されていれば、そのカウントダウンを表示する
+  let nextRoundNotice = "";
+  if (!noRound && round.phase === "closed") {
+    const { data: nextRound } = await sb.from("rounds").select("start_at, round_number").eq("round_number", round.round_number + 1).maybeSingle();
+    if (nextRound && nextRound.start_at && now < new Date(nextRound.start_at)) {
+      countdownTarget = nextRound.start_at;
+      countdownLabel = `第${nextRound.round_number}希望 開始まで`;
+    } else {
+      nextRoundNotice = `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>`;
+    }
+  }
+
   if (!noRound) {
     html += `<div class="round-hero">
       <div class="round-hero-title">第${round.round_number}希望 － ${notStarted0 ? "開始前" : (phaseWordMap[round.phase] || round.phase)}</div>
-      ${countdownTarget ? `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>` : (!notStarted0 && (round.phase === "closed" || (round.phase === "second_match" && secondEnded0) || (round.phase === "third_match" && thirdEnded0) || (round.phase === "first_choice" && firstEnded0)) ? `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>` : "")}
+      ${countdownTarget ? `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>` : (nextRoundNotice || (!notStarted0 && (round.phase === "second_match" && secondEnded0) || (round.phase === "third_match" && thirdEnded0) || (round.phase === "first_choice" && firstEnded0) ? `<div class="small-muted">まもなく自動で抽選が行われます。</div>` : ""))}
       <div class="small-muted" style="margin-top:6px;">
         開始: ${round.start_at ? fmtDate(round.start_at) : "-"}　
         1次締切: ${round.end_at ? fmtDate(round.end_at) : "-"}　
