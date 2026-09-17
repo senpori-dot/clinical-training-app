@@ -175,12 +175,14 @@ async function renderRoundsTab() {
         開始:${r.start_at ? new Date(r.start_at).toLocaleString("ja-JP") : "-"}<br/>
         1次締切:${r.end_at ? new Date(r.end_at).toLocaleString("ja-JP") : "-"}<br/>
         2次締切:${r.second_deadline ? new Date(r.second_deadline).toLocaleString("ja-JP") : "-"}<br/>
-        ${r.third_deadline ? `3次締切:${new Date(r.third_deadline).toLocaleString("ja-JP")}` : ""}
+        ${r.third_deadline ? `3次締切:${new Date(r.third_deadline).toLocaleString("ja-JP")}<br/>` : ""}
+        ${r.cancel_window_start || r.cancel_window_end ? `キャンセル受付:${r.cancel_window_start ? new Date(r.cancel_window_start).toLocaleString("ja-JP") : "?"}〜${r.cancel_window_end ? new Date(r.cancel_window_end).toLocaleString("ja-JP") : "?"}` : ""}
       </td>
       <td>${r.is_current ? "★現在" : ""}</td>
       <td>
         ${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在にする</button>` : ""}
         ${r.phase === "closed" && !r.third_deadline ? `<button class="small secondary start-third" data-id="${r.id}">3次マッチングを追加</button>` : ""}
+        <button class="small secondary edit-cancel-window" data-id="${r.id}" data-start="${r.cancel_window_start || ''}" data-end="${r.cancel_window_end || ''}">キャンセル受付時間を設定</button>
       </td>
     </tr>`).join("");
 
@@ -208,6 +210,11 @@ async function renderRoundsTab() {
       <div style="margin:10px 0;">
         <label class="small-muted">2次マッチング締切日時（1次抽選で外れた人の再提出締切。この日時を過ぎると自動で2次抽選されます）</label>
         <input type="datetime-local" id="new-second-deadline" />
+      </div>
+      <div style="margin:10px 0;">
+        <label class="small-muted">1次確定後のキャンセル受付時間（任意。設定すると、1次で確定した学生がこの時間内だけ自分の確定枠をキャンセルして2次マッチングに回れます。1人1ラウンド1回まで、取り消し不可）</label>
+        <input type="datetime-local" id="new-cancel-start" placeholder="開始" />
+        <input type="datetime-local" id="new-cancel-end" placeholder="終了" />
       </div>
       <div style="margin:10px 0;">
         <p class="small-muted">氏名の公開ルール: 宿泊が絡まない施設は抽選確定まで自動的に匿名、宿泊が絡む施設は本人が任意のタイミングで公開できます（このラウンド作成では設定不要です）。</p>
@@ -243,10 +250,32 @@ async function renderRoundsTab() {
     };
   });
 
+  document.querySelectorAll(".edit-cancel-window").forEach(b => {
+    b.onclick = async () => {
+      const curStart = b.dataset.start ? new Date(b.dataset.start).toLocaleString("ja-JP") : "未設定";
+      const curEnd = b.dataset.end ? new Date(b.dataset.end).toLocaleString("ja-JP") : "未設定";
+      const startVal = prompt(`キャンセル受付の開始日時を「YYYY-MM-DDTHH:MM」で入力してください（例: 2026-09-18T08:00）\n現在の設定: ${curStart}`);
+      if (startVal === null) return;
+      const endVal = prompt(`キャンセル受付の終了日時を「YYYY-MM-DDTHH:MM」で入力してください（例: 2026-09-18T12:00）\n現在の設定: ${curEnd}`);
+      if (endVal === null) return;
+      const startIso = startVal ? new Date(startVal).toISOString() : null;
+      const endIso = endVal ? new Date(endVal).toISOString() : null;
+      if ((startVal && isNaN(new Date(startVal).getTime())) || (endVal && isNaN(new Date(endVal).getTime()))) {
+        alert("日時の形式が正しくありません。");
+        return;
+      }
+      await sb.from("rounds").update({ cancel_window_start: startIso, cancel_window_end: endIso }).eq("id", b.dataset.id);
+      alert("キャンセル受付時間を設定しました。");
+      renderRoundsTab();
+    };
+  });
+
   document.getElementById("create-round").onclick = async () => {
     const startVal = document.getElementById("new-start").value;
     const endVal = document.getElementById("new-end").value;
     const secondDeadlineVal = document.getElementById("new-second-deadline").value;
+    const cancelStartVal = document.getElementById("new-cancel-start").value;
+    const cancelEndVal = document.getElementById("new-cancel-end").value;
     await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
     await sb.from("rounds").insert({
       round_number: nextRoundNumber,
@@ -254,6 +283,8 @@ async function renderRoundsTab() {
       start_at: startVal ? new Date(startVal).toISOString() : null,
       end_at: endVal ? new Date(endVal).toISOString() : null,
       second_deadline: secondDeadlineVal ? new Date(secondDeadlineVal).toISOString() : null,
+      cancel_window_start: cancelStartVal ? new Date(cancelStartVal).toISOString() : null,
+      cancel_window_end: cancelEndVal ? new Date(cancelEndVal).toISOString() : null,
       is_current: true,
       phase: "first_choice",
     });
@@ -278,9 +309,9 @@ async function renderMatchingTab() {
     return;
   }
 
-  const attempt = round.phase === "second_match" ? 2 : 1;
+  const attempt = round.phase === "second_match" ? 2 : round.phase === "third_match" ? 3 : 1;
   const now = new Date();
-  const relevantDeadline = attempt === 2 ? round.second_deadline : round.end_at;
+  const relevantDeadline = attempt === 3 ? round.third_deadline : attempt === 2 ? round.second_deadline : round.end_at;
   const deadlinePassed = relevantDeadline && now > new Date(relevantDeadline);
 
   const { data: prefs } = await sb
@@ -288,6 +319,35 @@ async function renderMatchingTab() {
     .select("*, students(attendance_number, name), slots(facility_name, department_name, cap_1,cap_2,cap_3,cap_4,cap_5,cap_6)")
     .eq("round_id", round.id)
     .eq("attempt", attempt);
+
+  // ===== 未回答者の一覧（10人を切ったら名前を表示） =====
+  const { data: allStudentsForVoteCheck } = await sb.from("students").select("id, attendance_number, name");
+  const { data: allAssignCountsForVoteCheck } = await sb.from("assignments").select("student_id");
+  const assignCnt = {};
+  (allAssignCountsForVoteCheck || []).forEach(a => { assignCnt[a.student_id] = (assignCnt[a.student_id] || 0) + 1; });
+
+  let excludedIds = new Set();
+  for (let a = 1; a < attempt; a++) {
+    const { data: confirmedAtA } = await sb
+      .from("preferences")
+      .select("student_id")
+      .eq("round_id", round.id)
+      .eq("attempt", a)
+      .eq("status", "confirmed");
+    (confirmedAtA || []).forEach(p => excludedIds.add(p.student_id));
+  }
+
+  const eligibleStudents = (allStudentsForVoteCheck || []).filter(s => (assignCnt[s.id] || 0) < 6 && !excludedIds.has(s.id));
+  const votedIds = new Set((prefs || []).map(p => p.student_id));
+  const notVoted = eligibleStudents.filter(s => !votedIds.has(s.id)).sort((a,b) => a.attendance_number - b.attendance_number);
+
+  let notVotedHtml = "";
+  if (notVoted.length > 0 && notVoted.length < 10) {
+    notVotedHtml = `<div class="card" style="border:2px solid #b3413a;">
+      <b style="color:#b3413a;">未回答: 残り${notVoted.length}人</b>
+      <p style="margin-top:6px;">${notVoted.map(s => `${s.attendance_number} ${esc(s.name)}`).join("、 ")}</p>
+    </div>`;
+  }
 
   const groups = {};
   for (const p of (prefs || [])) {
@@ -369,13 +429,15 @@ async function renderMatchingTab() {
   }).join("");
 
   document.getElementById("tab-content").innerHTML = `
+    ${notVotedHtml}
     ${gridHtml}
     <div class="card">
       <div class="flex-between">
-        <b>第${round.round_number}希望（${attempt===2?'2次マッチング':'1次'}）の集計</b>
+        <b>第${round.round_number}希望（${attempt===3?'3次マッチング':attempt===2?'2次マッチング':'1次'}）の集計</b>
         <span class="small-muted">状態: ${round.phase}</span>
       </div>
       <p class="small-muted">${relevantDeadline ? `締切: ${new Date(relevantDeadline).toLocaleString("ja-JP")}${deadlinePassed ? '（締切超過 — 通常は自動で抽選されます）' : '（締切前は自由に希望を出せます。定員オーバーもOK）'}` : "締切未設定"}</p>
+      <p class="small-muted">対象者 ${eligibleStudents.length}人中 ${votedIds.size}人が回答済み（未回答 ${notVoted.length}人）</p>
       <table class="slots" style="margin-top:10px;">
         <thead><tr><th>クール</th><th>実習先</th><th>希望者数/定員</th><th>希望者</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="4" class="small-muted">まだ希望の提出がありません</td></tr>'}</tbody>
