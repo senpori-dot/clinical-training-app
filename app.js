@@ -189,16 +189,18 @@ function openRulesModal() {
   });
 }
 
-function startCountdown(targetIso) {
+function startCountdown(targetIso, elId, doneText) {
+  elId = elId || "countdown-timer";
+  doneText = doneText || "まもなく処理されます…";
   const target = new Date(targetIso).getTime();
-  const timerEl = document.getElementById("countdown-timer");
+  const timerEl = document.getElementById(elId);
   if (!timerEl) return;
   function tick() {
-    const el = document.getElementById("countdown-timer");
+    const el = document.getElementById(elId);
     if (!el) return; // ページが差し替わったら停止
     const diff = target - Date.now();
     if (diff <= 0) {
-      el.textContent = "まもなく処理されます…";
+      el.textContent = doneText;
       clearInterval(intervalId);
       return;
     }
@@ -569,6 +571,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   let myPref = null;
   let attempt = !noRound && round.phase === "second_match" ? 2 : 1;
   let displayAttempt = 1;
+  let cancelCountdownTarget = null;
 
   let statusNotice = "";
   let resultAnimation = "";
@@ -636,11 +639,18 @@ async function renderApp(student, round, assignments, lodgingSettings) {
       if (Date.now() >= cwStart && Date.now() <= cwEnd) {
         statusNotice += `<div class="card" style="border:2px solid #b3413a;">
           <b style="color:#b3413a;">この枠をキャンセルできます</b>
-          <p class="small-muted">キャンセルすると、この確定は取り消され、2次マッチングで空いている枠から改めて選び直せます。キャンセルできるのは1ラウンドにつき1回だけで、<b>押すと取り消しはできません。</b></p>
+          <div class="countdown-box" style="background:#fbdede;color:#b3413a;"><span>キャンセル受付終了まで</span> <span id="cancel-countdown-timer">--:--:--</span></div>
+          <p class="small-muted" style="margin-top:8px;">キャンセルすると、この確定は取り消され、2次マッチングで空いている枠から改めて選び直せます。キャンセルできるのは1ラウンドにつき1回だけで、<b>押すと取り消しはできません。</b></p>
           <button class="secondary" id="cancel-confirmed-btn" data-pref-id="${myPref.id}" data-course="${myPref.course_number}">この枠をキャンセルする（取り消し不可）</button>
         </div>`;
+        cancelCountdownTarget = round.cancel_window_end;
       } else if (Date.now() < cwStart) {
-        statusNotice += `<div class="small-muted" style="margin-top:6px;">キャンセル受付は ${fmtDate(round.cancel_window_start)} から ${fmtDate(round.cancel_window_end)} までです。</div>`;
+        statusNotice += `<div class="card">
+          <b class="panel-heading">キャンセル受付開始までのカウントダウン</b>
+          <div class="countdown-box"><span>キャンセル受付開始まで</span> <span id="cancel-countdown-timer">--:--:--</span></div>
+          <div class="small-muted" style="margin-top:6px;">キャンセル受付は ${fmtDate(round.cancel_window_start)} から ${fmtDate(round.cancel_window_end)} までです。</div>
+        </div>`;
+        cancelCountdownTarget = round.cancel_window_start;
       }
     }
   } else if (myPref && myPref.status === "lost" && attempt === maxOfferedAttempt && openAttempt !== attempt + 1) {
@@ -714,6 +724,9 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
   if (countdownTarget) {
     startCountdown(countdownTarget);
+  }
+  if (cancelCountdownTarget) {
+    startCountdown(cancelCountdownTarget, "cancel-countdown-timer", "まもなく切り替わります…");
   }
 
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
