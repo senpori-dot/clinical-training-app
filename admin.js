@@ -43,6 +43,7 @@ async function renderDashboard() {
       <button data-tab="rounds" class="${activeTab==='rounds'?'active':''}">ラウンド管理</button>
       <button data-tab="matching" class="${activeTab==='matching'?'active':''}">集計・抽選</button>
       <button data-tab="lodging" class="${activeTab==='lodging'?'active':''}">宿泊希望</button>
+      <button data-tab="trade" class="${activeTab==='trade'?'active':''}">トレード</button>
     </div>
     <div id="tab-content"><p>読み込み中...</p></div>
   `;
@@ -52,7 +53,72 @@ async function renderDashboard() {
   if (activeTab === "students") renderStudentsTab();
   else if (activeTab === "rounds") renderRoundsTab();
   else if (activeTab === "matching") renderMatchingTab();
-  else renderLodgingTab();
+  else if (activeTab === "lodging") renderLodgingTab();
+  else renderTradeTab();
+}
+
+// ============================================================
+// トレード期間の管理
+// ============================================================
+async function renderTradeTab() {
+  const { data: settings } = await sb.from("trade_settings").select("*").eq("id", 1).maybeSingle();
+
+  const { data: offers } = await sb
+    .from("trade_offers")
+    .select("*, students:student_id(attendance_number, name), slots(facility_name, department_name)")
+    .order("created_at", { ascending: false });
+
+  const statusLabel = { open: "出品中", matched: "成立", cancelled: "取り下げ" };
+  const rows = (offers || []).map(o => `
+    <tr>
+      <td>${o.students.attendance_number} ${esc(o.students.name)}</td>
+      <td>${window.COURSE_LABELS[o.course_number-1]}</td>
+      <td>${esc(o.slots.facility_name)} ${esc(o.slots.department_name)}</td>
+      <td>${statusLabel[o.status] || o.status}</td>
+    </tr>
+  `).join("");
+
+  document.getElementById("tab-content").innerHTML = `
+    <div class="card">
+      <b>トレード期間の設定</b>
+      <p class="small-muted">全クールの確定後に、学生同士が同じクール番号の枠を交換できる機能です（trade.html）。院内3・院外3・内科3・外科3、4組み合わせのルールを崩す交換・移動は自動的にブロックされます。</p>
+      <div style="margin:10px 0;">
+        <label><input type="checkbox" id="trade-enabled" ${settings && settings.enabled ? "checked" : ""} /> トレードを有効にする</label>
+      </div>
+      <div style="margin:10px 0;">
+        <label class="small-muted">開始日時（任意）</label>
+        <input type="datetime-local" id="trade-start" value="${settings && settings.start_at ? toLocalInputValue(settings.start_at) : ''}" />
+      </div>
+      <div style="margin:10px 0;">
+        <label class="small-muted">終了日時（任意）</label>
+        <input type="datetime-local" id="trade-end" value="${settings && settings.end_at ? toLocalInputValue(settings.end_at) : ''}" />
+      </div>
+      <button id="save-trade-settings">保存</button>
+      <div id="trade-save-result" class="small-muted" style="margin-top:8px;"></div>
+    </div>
+    <div class="card">
+      <b>出品状況（新しい順）</b>
+      <table class="slots" style="margin-top:10px;">
+        <thead><tr><th>学生</th><th>クール</th><th>枠</th><th>状態</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="small-muted">まだ出品はありません</td></tr>'}</tbody>
+      </table>
+    </div>
+  `;
+
+  document.getElementById("save-trade-settings").onclick = async () => {
+    const enabled = document.getElementById("trade-enabled").checked;
+    const startVal = document.getElementById("trade-start").value;
+    const endVal = document.getElementById("trade-end").value;
+    const { error } = await sb.from("trade_settings").upsert({
+      id: 1,
+      enabled,
+      start_at: startVal ? new Date(startVal).toISOString() : null,
+      end_at: endVal ? new Date(endVal).toISOString() : null,
+    });
+    const resultEl = document.getElementById("trade-save-result");
+    resultEl.textContent = error ? "保存に失敗しました: " + error.message : "保存しました。";
+    if (!error) renderTradeTab();
+  };
 }
 
 // ============================================================
@@ -352,6 +418,33 @@ async function renderMatchingTab() {
     </div>`;
   }
 
+  // ===== キャンセル履歴（全ラウンド共通） =====
+  const { data: cancelledPrefs } = await sb
+    .from("preferences")
+    .select("*, students(attendance_number, name), slots(facility_name, department_name), rounds(round_number)")
+    .eq("cancelled", true)
+    .order("created_at", { ascending: false });
+
+  let cancelledHtml = "";
+  if (cancelledPrefs && cancelledPrefs.length > 0) {
+    cancelledHtml = `<div class="card">
+      <b>キャンセル履歴</b>
+      <table class="slots" style="margin-top:8px;">
+        <thead><tr><th>学生</th><th>ラウンド</th><th>クール</th><th>キャンセルした枠</th></tr></thead>
+        <tbody>
+          ${cancelledPrefs.map(p => `
+            <tr>
+              <td>${p.students.attendance_number} ${esc(p.students.name)}</td>
+              <td>第${p.rounds.round_number}希望</td>
+              <td>${window.COURSE_LABELS[p.course_number-1]}</td>
+              <td>${esc(p.slots.facility_name)} ${esc(p.slots.department_name)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  }
+
   const groups = {};
   for (const p of (prefs || [])) {
     const key = p.slot_id + "_" + p.course_number;
@@ -433,6 +526,7 @@ async function renderMatchingTab() {
 
   document.getElementById("tab-content").innerHTML = `
     ${notVotedHtml}
+    ${cancelledHtml}
     ${gridHtml}
     <div class="card">
       <div class="flex-between">

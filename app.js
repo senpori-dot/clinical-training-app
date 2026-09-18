@@ -410,9 +410,9 @@ function attachCancelHandler(student) {
     const prefId = btn.dataset.prefId;
     const courseNumber = Number(btn.dataset.course);
     const { error: e1 } = await sb.from("preferences").update({ status: "lost", cancelled: true, won_lottery: false }).eq("id", prefId);
-    const { error: e2 } = await sb.from("assignments").delete().eq("student_id", student.id).eq("course_number", courseNumber);
-    if (e1 || e2) {
-      alert("キャンセル処理に失敗しました。もう一度お試しいただくか、学年代表にご連絡ください。");
+    const { data: delData, error: e2 } = await sb.from("assignments").delete().eq("student_id", student.id).eq("course_number", courseNumber).select();
+    if (e1 || e2 || !delData || delData.length === 0) {
+      alert("キャンセル処理に失敗しました。もう一度お試しいただくか、学年代表にご連絡ください。（枠の削除が反映されませんでした）");
       return;
     }
     location.reload();
