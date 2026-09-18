@@ -31,7 +31,16 @@ window.tryRunLotteryIfDue = async function (sb, round) {
     return fresh || round;
   }
 
-  await window.runLotteryCore(sb, round, phaseToProcess);
+  try {
+    await window.runLotteryCore(sb, round, phaseToProcess);
+  } catch (err) {
+    // 途中で失敗した場合、processing状態のまま固まらないよう自動的に元のphaseへ戻す。
+    // これにより、次に誰かがページを開いたときに自動で再試行される。
+    console.error("抽選処理中にエラーが発生しました。ロックを解除して再試行できるようにします。", err);
+    await sb.from("rounds").update({ phase: phaseToProcess }).eq("id", round.id).eq("phase", lockPhase);
+    const { data: fresh } = await sb.from("rounds").select("*").eq("id", round.id).maybeSingle();
+    return fresh || round;
+  }
 
   const { data: fresh } = await sb.from("rounds").select("*").eq("id", round.id).maybeSingle();
   return fresh || round;
