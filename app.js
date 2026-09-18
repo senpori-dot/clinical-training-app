@@ -745,6 +745,35 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     .from("assignments")
     .select("slot_id, course_number, students(attendance_number, name)");
 
+  // キャンセルによって空いた枠のお知らせ（直近3日以内・まだ埋まっていないもの）
+  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
+  const { data: recentCancellations } = await sb
+    .from("preferences")
+    .select("course_number, slots(id, facility_name, department_name, cap_1,cap_2,cap_3,cap_4,cap_5,cap_6)")
+    .eq("cancelled", true)
+    .gte("created_at", threeDaysAgo);
+
+  const stillOpenCancellations = (recentCancellations || []).filter(p => {
+    const cap = p.slots["cap_" + p.course_number];
+    const used = allAssignments.filter(a => a.slot_id === p.slots.id && a.course_number === p.course_number).length;
+    return cap > 0 && used < cap;
+  });
+  if (stillOpenCancellations.length > 0) {
+    const seen = new Set();
+    const uniqueRows = stillOpenCancellations.filter(p => {
+      const key = p.course_number + "_" + p.slots.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    appEl.insertAdjacentHTML("afterbegin", `<div class="card" style="border:2px solid #2f6fb3;">
+      <b style="color:#2f6fb3;">📣 キャンセルにより空きが出た枠</b>
+      <ul style="margin:8px 0 0 18px; padding:0;">
+        ${uniqueRows.map(p => `<li>${window.COURSE_LABELS[p.course_number-1]}「${esc(p.slots.facility_name)} ${esc(p.slots.department_name)}」</li>`).join("")}
+      </ul>
+    </div>`);
+  }
+
   const facilityCourseCount = {};
   const facilityConfirmedCount = {};
   for (const s of slots) {
