@@ -911,37 +911,34 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
 
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
-
-  if (filledCourses.has(courseNumber)) {
-    const namesHtml = confirmedHere.map(a =>
-      a.students.attendance_number === student.attendance_number
-        ? `<span class="me-confirmed">✔ ${esc(a.students.name)}(あなた)</span>`
-        : `<b>${esc(a.students.name)}</b>`
-    ).join("<br>");
-    return `<td class="cell-slot cell-other-term">
-      <div class="cell-cap">${confirmedHere.length}/${cap}</div>
-      ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
-    </td>`;
-  }
+  const isMyOwnFilledCourse = filledCourses.has(courseNumber);
 
   const isMine = !!(myPref && myPref.slot_id === slot.id && myPref.course_number === courseNumber &&
     (myPref.status === "submitted" || myPref.status === "lottery"));
   const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.course_number === courseNumber && p.status !== "confirmed");
   const totalCount = confirmedHere.length + pendingHere.length;
-  const isExactFull = totalCount === cap;
-  const isOverFull = totalCount > cap;
   const confirmedFull = confirmedHere.length >= cap;
 
   const facilityLimit = limitMap[slot.facility_name];
   const facKey = slot.facility_name + "_" + courseNumber;
   const facCount = facilityCourseCount[facKey] || 0;
-  const facilityExact = facilityLimit && facCount === facilityLimit.max_total;
-  const facilityOver = facilityLimit && facCount > facilityLimit.max_total;
   const facilityConfirmedFull = facilityLimit && (facilityConfirmedCount[facKey] || 0) >= facilityLimit.max_total;
+
+  // 枠の色（縁取り）は「今のラウンドで実際に希望している人」がいるかどうかだけで判定する。
+  // 既に他ラウンドで確定済みの人数だけで空きがあるように見えても、それだけでは色をつけない。
+  const remainingCap = cap - confirmedHere.length;
+  const isExactFull = pendingHere.length > 0 && pendingHere.length === Math.max(remainingCap, 0);
+  const isOverFull = pendingHere.length > Math.max(remainingCap, 0);
+  const facilityExact = facilityLimit && pendingHere.length > 0 && facCount === facilityLimit.max_total;
+  const facilityOver = facilityLimit && facCount > facilityLimit.max_total && pendingHere.length > 0;
 
   const lodging = requiresLodging(slot);
 
-  const confirmedNamesHtml = confirmedHere.map(a => `<b>${esc(a.students.name)}</b>`).join("<br>");
+  const confirmedNamesHtml = confirmedHere.map(a =>
+    a.students.attendance_number === student.attendance_number
+      ? `<span class="me-confirmed">✔ ${esc(a.students.name)}(あなた)</span>`
+      : `<b>${esc(a.students.name)}</b>`
+  ).join("<br>");
 
   // 匿名ルール：
   // ・宿泊が絡む施設 → 最初から全員に氏名を表示（部屋割り調整のため）。
@@ -973,15 +970,17 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
 
   const combo = comboKeyOf(slot);
-  let eligible = canEdit && comboEligible(counts, combo, feasible);
+  // 自分がこのクールを既に確定している場合は、他の情報は見えるが選択操作だけできないようにする
+  let eligible = !isMyOwnFilledCourse && canEdit && comboEligible(counts, combo, feasible);
 
   let cls = "cell-slot";
-  if (eligible) cls += " cell-open";
+  if (isMyOwnFilledCourse) cls += " cell-other-term";
+  else if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
-  // 枠(ボーダー)の色は定員に対する希望者数の状況を独立して常に示す（誰も希望していない場合は無色）：
+  // 枠(ボーダー)の色は「今のラウンドで実際に希望している人」がいる場合だけ表示する：
   // 空きあり=青、ちょうど定員=オレンジ、超過=赤
-  if (totalCount > 0) {
+  if (pendingHere.length > 0) {
     if (isOverFull || facilityOver) cls += " frame-over";
     else if (isExactFull || facilityExact) cls += " frame-exact";
     else cls += " frame-under";
@@ -995,7 +994,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     : "";
 
   let overNote = "";
-  if (isOverFull || facilityOver) overNote = `<div class="cell-names" style="color:#b3413a;">定員超過中</div>`;
+  if (pendingHere.length > 0 && (isOverFull || facilityOver)) overNote = `<div class="cell-names" style="color:#b3413a;">定員超過中</div>`;
 
   return `<td class="${cls}" ${dataAttrs}>
     <div class="cell-cap">${totalCount}/${cap}</div>
