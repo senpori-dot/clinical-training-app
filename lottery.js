@@ -53,7 +53,7 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
 
   const { data: prefs, error: prefsErr } = await sb
     .from("preferences")
-    .select("id, student_id, slot_id, course_number, status")
+    .select("id, student_id, slot_id, course_number, paired_course_number, status")
     .eq("round_id", round.id)
     .eq("attempt", attempt)
     .eq("status", "submitted");
@@ -115,6 +115,40 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
     const curFac = facilityCourseCount[facKey] || 0;
     const facLimit = limitMap[fname];
     const wasCompetitive = (groupTotal[slotKey] + curSlot) > cap;
+
+    // 病理診断など「2クール連続で履修が必要」な希望は、両方のクールに空きがある場合のみまとめて確定する
+    if (p.paired_course_number) {
+      const pairCourse = p.paired_course_number;
+      const pairCap = slot["cap_" + pairCourse];
+      const pairSlotKey = p.slot_id + "_" + pairCourse;
+      const pairFacKey = fname + "_" + pairCourse;
+      const curPairSlot = slotCourseCount[pairSlotKey] || 0;
+      const curPairFac = facilityCourseCount[pairFacKey] || 0;
+      const pairOk = curPairSlot < pairCap && (!facLimit || curPairFac < facLimit);
+      const primaryOk = curSlot < cap && (!facLimit || curFac < facLimit);
+
+      if (primaryOk && pairOk) {
+        await sb.from("preferences").update({ status: "confirmed", won_lottery: wasCompetitive }).eq("id", p.id);
+        await sb.from("assignments").upsert(
+          { student_id: p.student_id, course_number: p.course_number, slot_id: p.slot_id },
+          { onConflict: "student_id,course_number" }
+        );
+        await sb.from("assignments").upsert(
+          { student_id: p.student_id, course_number: pairCourse, slot_id: p.slot_id },
+          { onConflict: "student_id,course_number" }
+        );
+        slotCourseCount[slotKey] = curSlot + 1;
+        facilityCourseCount[facKey] = curFac + 1;
+        slotCourseCount[pairSlotKey] = curPairSlot + 1;
+        facilityCourseCount[pairFacKey] = curPairFac + 1;
+        confirmedCount++;
+      } else {
+        // 片方でも埋まっていれば、2クール連続が成立しないためどちらも不成立にする
+        await sb.from("preferences").update({ status: "lost", won_lottery: false }).eq("id", p.id);
+        lostCount++;
+      }
+      continue;
+    }
 
     if (curSlot < cap && (!facLimit || curFac < facLimit)) {
       await sb.from("preferences").update({ status: "confirmed", won_lottery: wasCompetitive }).eq("id", p.id);

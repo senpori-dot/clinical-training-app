@@ -1031,17 +1031,21 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   // 背景は基本そのままの科目色。自分が選んだものだけ紫背景にする
   if (isMine) cls += " cell-mine";
 
+  const requiresPairing = slot.department_name.includes("病理診断");
+
   const dataAttrs = eligible
-    ? `data-slot="${slot.id}" data-course="${courseNumber}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}"`
+    ? `data-slot="${slot.id}" data-course="${courseNumber}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}" ${requiresPairing ? 'data-pairing="1"' : ''}`
     : "";
 
   let overNote = "";
   if (pendingHere.length > 0 && (isOverFull || facilityOver)) overNote = `<div class="cell-names" style="color:#b3413a;">定員超過中</div>`;
+  const pairingNote = requiresPairing ? `<div class="lodging-badge">🔗 2クール連続で履修が必要（選択時に前後どちらかを選べます）</div>` : "";
 
   return `<td class="${cls}" ${dataAttrs}>
     <div class="cell-cap">${totalCount}/${cap}</div>
     ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
     ${overNote}
+    ${pairingNote}
   </td>`;
 }
 
@@ -1051,15 +1055,39 @@ async function onCellClick(td, student, round, attempt, myPref) {
   const facility = td.dataset.facility;
   const dept = td.dataset.dept;
   const courseLabel = window.COURSE_LABELS[courseNumber - 1];
+  const requiresPairing = td.dataset.pairing === "1";
 
-  const ok = confirm(`${courseLabel}「${facility} ${dept}」を希望として提出します。よろしいですか？`);
+  let pairedCourseNumber = null;
+  if (requiresPairing) {
+    const prevCourse = courseNumber - 1;
+    const nextCourse = courseNumber + 1;
+    const options = [];
+    if (prevCourse >= 1) options.push(prevCourse);
+    if (nextCourse <= 6) options.push(nextCourse);
+    if (options.length === 0) {
+      alert("この科は2クール連続での履修が必要ですが、前後どちらのクールも選べません。");
+      return;
+    }
+    const choiceText = options.map(c => `${c}: ${window.COURSE_LABELS[c-1]}`).join(" / ");
+    const answer = prompt(`この科は2クール連続で履修する必要があります。${courseLabel}と組み合わせるもう一方のクールを番号で入力してください。\n選べるクール番号: ${choiceText}`);
+    const chosen = Number(answer);
+    if (!options.includes(chosen)) {
+      alert("入力されたクール番号が選べません。もう一度お試しください。");
+      return;
+    }
+    pairedCourseNumber = chosen;
+  }
+
+  const ok = confirm(requiresPairing
+    ? `${courseLabel}と${window.COURSE_LABELS[pairedCourseNumber-1]}の2クール連続で「${facility} ${dept}」を希望として提出します。両方に空きがない場合は成立しません。よろしいですか？`
+    : `${courseLabel}「${facility} ${dept}」を希望として提出します。よろしいですか？`);
   if (!ok) return;
 
   td.style.opacity = "0.5";
 
   if (myPref) {
     const { error } = await sb.from("preferences")
-      .update({ slot_id: slotId, course_number: courseNumber, status: "submitted" })
+      .update({ slot_id: slotId, course_number: courseNumber, paired_course_number: pairedCourseNumber, status: "submitted" })
       .eq("id", myPref.id);
     if (error) { alert("送信に失敗しました: " + error.message); td.style.opacity = "1"; return; }
   } else {
@@ -1068,6 +1096,7 @@ async function onCellClick(td, student, round, attempt, myPref) {
       round_id: round.id,
       slot_id: slotId,
       course_number: courseNumber,
+      paired_course_number: pairedCourseNumber,
       attempt: attempt,
       status: "submitted",
     });
