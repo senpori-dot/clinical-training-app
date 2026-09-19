@@ -746,7 +746,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   const { data: roundPrefs } = noRound ? { data: [] } : await sb
     .from("preferences")
-    .select("slot_id, course_number, status, reveal_self, student_id, students(attendance_number, name)")
+    .select("slot_id, course_number, paired_course_number, status, reveal_self, student_id, students(attendance_number, name)")
     .eq("round_id", round.id)
     .eq("attempt", displayAttempt)
     .in("status", ["submitted", "lottery", "confirmed"]);
@@ -789,7 +789,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     if (s.institution_type !== "external") continue;
     for (let c = 1; c <= 6; c++) {
       const confirmedN = allAssignments.filter(a => a.slot_id === s.id && a.course_number === c).length;
-      const pendingN = roundPrefs.filter(p => p.slot_id === s.id && p.course_number === c && p.status !== "confirmed").length;
+      const pendingN = roundPrefs.filter(p => p.slot_id === s.id && (p.course_number === c || p.paired_course_number === c) && p.status !== "confirmed").length;
       const key = s.facility_name + "_" + c;
       facilityCourseCount[key] = (facilityCourseCount[key] || 0) + confirmedN + pendingN;
       facilityConfirmedCount[key] = (facilityConfirmedCount[key] || 0) + confirmedN;
@@ -965,9 +965,12 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
   const isMyOwnFilledCourse = filledCourses.has(courseNumber);
 
-  const isMine = !!(myPref && myPref.slot_id === slot.id && myPref.course_number === courseNumber &&
+  const isMine = !!(myPref && myPref.slot_id === slot.id &&
+    (myPref.course_number === courseNumber || myPref.paired_course_number === courseNumber) &&
     (myPref.status === "submitted" || myPref.status === "lottery"));
-  const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id && p.course_number === courseNumber && p.status !== "confirmed");
+  const pendingHere = roundPrefs.filter(p => p.slot_id === slot.id &&
+    (p.course_number === courseNumber || p.paired_course_number === courseNumber) &&
+    p.status !== "confirmed");
   const totalCount = confirmedHere.length + pendingHere.length;
   const confirmedFull = confirmedHere.length >= cap;
 
