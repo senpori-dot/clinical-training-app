@@ -364,6 +364,7 @@ table.pref-grid tbody tr.facility-start td { border-top: 3px solid var(--navy); 
 .facility-name { text-decoration: underline dotted; }
 .facility-limit-badge { font-size: 0.58rem; color: #b3413a; font-weight: 700; margin-top: 2px; white-space: normal; }
 .lodging-badge { font-size: 0.58rem; color: #1c5fa8; font-weight: 700; margin-top: 2px; white-space: normal; }
+.pairing-badge { font-size: 0.58rem; color: #b3413a; font-weight: 800; margin-top: 2px; white-space: normal; }
 
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.45);
@@ -379,3 +380,4 @@ table.pref-grid tbody tr.facility-start td { border-top: 3px solid var(--navy); 
   .modal-backdrop { align-items: center; }
   .modal-box { border-radius: 14px; }
 }
+.choice-btn { width: 100%; text-align: center; }

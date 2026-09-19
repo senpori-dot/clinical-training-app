@@ -166,9 +166,19 @@ function openRulesModal() {
 <li>定員オーバー → システムでランダム抽選</li>
 <li>抽選で外れた → 空いている枠で2次マッチング</li>
 </ul>
-<p>基本的に、1つのラウンドについては2次マッチングまでで終了する予定です。そのため、2次マッチングでも抽選に外れてしまった場合は、そのラウンドでは枠を確保できなかったという扱いになります。</p>
-<p>ただし、次のラウンドが始まるまでに個別にLINEをいただければ、空き状況を見て調整できる場合があります。原則として翌日12時までに連絡してください。ただし、同じ空き枠を複数人が希望している場合などは、希望通りに調整できない可能性があります。</p>
-<p>また、第5・第6ラウンドあたりになると空き枠自体が少なくなり、2次マッチングまででは全員決まらない可能性もあります。その場合は、状況を見て3次マッチングを追加するなど、必要に応じて対応します。</p>
+
+<p><b>■ 2次マッチングでのお願い：なるべく人と被らないように選んでください</b></p>
+<p>2次マッチングに参加するのは「1次で外れてしまった人」だけなので、対象人数はそもそも少なくなっています。ここでもし全員が同じような枠に集中してしまうと、2次でもまた抽選になり、そこでまた外れる人が出て「3次マッチング」「4次マッチング」…とキリなく続いてしまいます。<b>空いている枠の中から、他の人があまり選ばなそうなところを選んでもらえると、抽選そのものが起きにくくなり、みんなが早く・確実に決まります。</b>ぜひご協力をお願いします。</p>
+
+<p><b>■ 2次マッチングの締切後、何が起きるか</b></p>
+<p>2次締切の時点で、「このまま抽選したら外れてしまいそうな人」が何人くらいいるかを確認します。そのうえで、次のどちらかで対応します。</p>
+<ul>
+<li><b>外れる見込みの人が5人以上いる場合</b> → その場で3次マッチングを開始します。もう一度、その時点で空いている枠の中から全員で選び直すチャンスを設けます。</li>
+<li><b>外れる見込みの人が5人未満の場合</b> → そのまま通常どおり抽選を行います。抽選で外れてしまった人は、次のラウンド（第◯希望）が始まるまでの間に、坂本にLINEで直接連絡してもらい、空いている枠の中から個別に決めてもらいます。</li>
+</ul>
+<p>つまり、「外れそうな人が少なければ一人ひとりLINEで個別対応、多ければ全員参加の3次マッチングを開く」という使い分けです。どちらの場合でも、最終的には必ず実習先が決まるようになっているので、ここは安心してください。</p>
+
+<p>また、第5・第6ラウンドあたりになると空き枠自体が少なくなり、2次マッチングまででは全員決まらない可能性もあります。その場合も、上記と同じ考え方（5人以上なら3次マッチング、5人未満なら個別LINE対応）で対応します。</p>
 
 <p><b>■ 院内3・院外3、内科3・外科3について</b></p>
 <p>要件を満たせるように、アプリ上で現在の取得状況を確認できるようにしています。</p>
@@ -745,13 +755,12 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     .from("assignments")
     .select("slot_id, course_number, students(attendance_number, name)");
 
-  // キャンセルによって空いた枠のお知らせ（直近3日以内・まだ埋まっていないもの）
-  const threeDaysAgo = new Date(Date.now() - 3 * 24 * 3600 * 1000).toISOString();
-  const { data: recentCancellations } = await sb
+  // キャンセルによって空いた枠のお知らせ（今のラウンドで出たものだけ・まだ埋まっていないもの）
+  const { data: recentCancellations } = noRound ? { data: [] } : await sb
     .from("preferences")
     .select("course_number, slots(id, facility_name, department_name, cap_1,cap_2,cap_3,cap_4,cap_5,cap_6)")
     .eq("cancelled", true)
-    .gte("created_at", threeDaysAgo);
+    .eq("round_id", round.id);
 
   const stillOpenCancellations = (recentCancellations || []).filter(p => {
     const cap = p.slots["cap_" + p.course_number];
@@ -894,7 +903,8 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
     const isKuroshioRow = s.department_name.includes("黒潮医療人養成プロジェクト") || s.facility_name.includes("黒潮医療人養成プロジェクト");
     const lodgingBadge = (!isKuroshioRow && requiresLodging(s)) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
     const dormBadge = s.facility_name.includes("南和歌山医療") ? `<div class="lodging-badge">🏨 宿舎:1人部屋2室+4人部屋1室(計6人まで／病院全体の人数上限ではありません)</div>` : "";
-    rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}${dormBadge}</td>`;
+    const pairingBadge = s.department_name.includes("病理診断") ? `<div class="pairing-badge">🔗 2ターム連続で取る必要があります</div>` : "";
+    rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}${dormBadge}${pairingBadge}</td>`;
     for (let c = 1; c <= 6; c++) {
       rows += renderCell(s, c, roundPrefs, allAssignments, student, round, attempt, myPref, canEdit, counts, feasible, globalRevealed, limitMap, facilityCourseCount, facilityConfirmedCount, filledCourses);
     }
@@ -1039,14 +1049,40 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   let overNote = "";
   if (pendingHere.length > 0 && (isOverFull || facilityOver)) overNote = `<div class="cell-names" style="color:#b3413a;">定員超過中</div>`;
-  const pairingNote = requiresPairing ? `<div class="lodging-badge">🔗 2クール連続で履修が必要（選択時に前後どちらかを選べます）</div>` : "";
 
   return `<td class="${cls}" ${dataAttrs}>
     <div class="cell-cap">${totalCount}/${cap}</div>
     ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
     ${overNote}
-    ${pairingNote}
   </td>`;
+}
+
+function openChoiceModal(title, message, options) {
+  // options: [{label, value}]。ボタンを押すとPromiseがそのvalueでresolveする。閉じた場合はnullでresolveする。
+  return new Promise((resolve) => {
+    ensureModalRoot();
+    const root = document.getElementById("facility-modal-root");
+    root.innerHTML = `
+      <div class="modal-backdrop" id="choice-backdrop">
+        <div class="modal-box">
+          <b>${esc(title)}</b>
+          <p style="margin-top:8px;">${esc(message)}</p>
+          <div style="display:flex; flex-direction:column; gap:8px; margin-top:12px;">
+            ${options.map((o, i) => `<button class="choice-btn" data-i="${i}">${esc(o.label)}</button>`).join("")}
+          </div>
+          <button class="secondary" id="choice-cancel-btn" style="margin-top:10px;">キャンセル</button>
+        </div>
+      </div>
+    `;
+    const cleanup = (value) => { closeFacilityModal(); resolve(value); };
+    root.querySelectorAll(".choice-btn").forEach(btn => {
+      btn.onclick = () => cleanup(options[Number(btn.dataset.i)].value);
+    });
+    document.getElementById("choice-cancel-btn").onclick = () => cleanup(null);
+    document.getElementById("choice-backdrop").addEventListener("click", (e) => {
+      if (e.target.id === "choice-backdrop") cleanup(null);
+    });
+  });
 }
 
 async function onCellClick(td, student, round, attempt, myPref) {
@@ -1062,20 +1098,18 @@ async function onCellClick(td, student, round, attempt, myPref) {
     const prevCourse = courseNumber - 1;
     const nextCourse = courseNumber + 1;
     const options = [];
-    if (prevCourse >= 1) options.push(prevCourse);
-    if (nextCourse <= 6) options.push(nextCourse);
+    if (prevCourse >= 1) options.push({ label: `${window.COURSE_LABELS[prevCourse-1]}と組み合わせる`, value: prevCourse });
+    if (nextCourse <= 6) options.push({ label: `${window.COURSE_LABELS[nextCourse-1]}と組み合わせる`, value: nextCourse });
     if (options.length === 0) {
       alert("この科は2クール連続での履修が必要ですが、前後どちらのクールも選べません。");
       return;
     }
-    const choiceText = options.map(c => `${c}: ${window.COURSE_LABELS[c-1]}`).join(" / ");
-    const answer = prompt(`この科は2クール連続で履修する必要があります。${courseLabel}と組み合わせるもう一方のクールを番号で入力してください。\n選べるクール番号: ${choiceText}`);
-    const chosen = Number(answer);
-    if (!options.includes(chosen)) {
-      alert("入力されたクール番号が選べません。もう一度お試しください。");
-      return;
-    }
-    pairedCourseNumber = chosen;
+    pairedCourseNumber = await openChoiceModal(
+      "2クール連続での履修が必要です",
+      `${courseLabel}「${facility} ${dept}」は2クール連続で履修する必要があります。もう一方のクールを選んでください。`,
+      options
+    );
+    if (pairedCourseNumber === null) return; // キャンセルされた
   }
 
   const ok = confirm(requiresPairing
