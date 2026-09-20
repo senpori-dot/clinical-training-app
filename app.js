@@ -1051,7 +1051,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const requiresPairing = slot.department_name.includes("病理診断");
 
   const dataAttrs = eligible
-    ? `data-slot="${slot.id}" data-course="${courseNumber}" data-institution="${slot.institution_type}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}" ${requiresPairing ? 'data-pairing="1"' : ''}`
+    ? `data-slot="${slot.id}" data-course="${courseNumber}" data-institution="${slot.institution_type}" data-category="${slot.category}" data-facility="${esc(slot.facility_name)}" data-dept="${esc(slot.department_name)}" ${requiresPairing ? 'data-pairing="1"' : ''}`
     : "";
 
   let overNote = "";
@@ -1117,6 +1117,25 @@ async function onCellClick(td, student, round, attempt, myPref) {
       options
     );
     if (pairedCourseNumber === null) return; // キャンセルされた
+
+    // 2クール分まとめて追加しても、院内3・院外3・内科3・外科3のルールを超えないか確認する
+    const institutionType = td.dataset.institution;
+    const category = td.dataset.category;
+    const { data: currentAssignments } = await sb
+      .from("assignments")
+      .select("course_number, count_exempt, slots(institution_type, category)")
+      .eq("student_id", student.id)
+      .not("course_number", "in", `(${courseNumber},${pairedCourseNumber})`);
+    const instCounts = { internal: 0, external: 0 };
+    const catCounts = { internal_medicine: 0, surgery: 0 };
+    (currentAssignments || []).forEach(a => {
+      instCounts[a.slots.institution_type]++;
+      if (!a.count_exempt) catCounts[a.slots.category]++;
+    });
+    if (instCounts[institutionType] + 2 > 3 || catCounts[category] + 2 > 3) {
+      alert(`この2クールをまとめて選ぶと、院内3・院外3・内科3・外科3のルールを超えてしまうため選択できません。（現在の${INSTITUTION_LABEL[institutionType]}: ${instCounts[institutionType]}/3、${CATEGORY_LABEL[category]}: ${catCounts[category]}/3 のところに2クール追加しようとしています）`);
+      return;
+    }
   }
 
   const ok = confirm(requiresPairing
