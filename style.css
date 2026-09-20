@@ -366,6 +366,14 @@ table.pref-grid tbody tr.facility-start td { border-top: 3px solid var(--navy); 
 .lodging-badge { font-size: 0.58rem; color: #1c5fa8; font-weight: 700; margin-top: 2px; white-space: normal; }
 .pairing-badge { font-size: 0.58rem; color: #b3413a; font-weight: 800; margin-top: 2px; white-space: normal; }
 
+.name-lodging-yes { color: #1e6b3a; }
+.name-lodging-no { color: #2f6fb3; }
+.name-lodging-unanswered { color: #b3413a; }
+.lodge-tag { font-size: 0.62rem; font-weight: 700; }
+.lodge-tag.lodge-yes { color: #1e6b3a; }
+.lodge-tag.lodge-no { color: #2f6fb3; }
+.lodge-tag.lodge-unanswered { color: #b3413a; }
+
 .modal-backdrop {
   position: fixed; inset: 0; background: rgba(0,0,0,0.45);
   display: flex; align-items: flex-end; justify-content: center;

@@ -750,7 +750,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   const { data: allAssignments } = await sb
     .from("assignments")
-    .select("slot_id, course_number, students(attendance_number, name)");
+    .select("slot_id, course_number, lodging_choice, students(attendance_number, name)");
 
   // キャンセルによって空いた枠のお知らせ（今のラウンドで出たものだけ・まだ埋まっていないもの）
   const { data: recentCancellations } = noRound ? { data: [] } : await sb
@@ -986,10 +986,17 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const lodging = requiresLodging(slot);
 
+  function lodgingTag(a) {
+    if (!lodging) return "";
+    if (a.lodging_choice === "yes") return ` <span class="lodge-tag lodge-yes">(宿泊する)</span>`;
+    if (a.lodging_choice === "no") return ` <span class="lodge-tag lodge-no">(宿泊しない)</span>`;
+    return ` <span class="lodge-tag lodge-unanswered">(未回答)</span>`;
+  }
+
   const confirmedNamesHtml = confirmedHere.map(a =>
     a.students.attendance_number === student.attendance_number
-      ? `<span class="me-confirmed">✔ ${esc(a.students.name)}(あなた)</span>`
-      : `<b>${esc(a.students.name)}</b>`
+      ? `<span class="me-confirmed">✔ ${esc(a.students.name)}(あなた)</span>${lodgingTag(a)}`
+      : `<b class="${lodging ? (a.lodging_choice === 'yes' ? 'name-lodging-yes' : a.lodging_choice === 'no' ? 'name-lodging-no' : 'name-lodging-unanswered') : ''}">${esc(a.students.name)}</b>${lodgingTag(a)}`
   ).join("<br>");
 
   // 匿名ルール：
