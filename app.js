@@ -558,12 +558,8 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
 
   if (allDone) {
-    html += `<div class="notice confirmed">すべてのクールが確定しました。お疲れ様でした。</div>`;
-    appEl.innerHTML = html;
-    attachLodgingHandlers();
-    attachCancelHandler(student);
-    maybeShowResultReveal("all-done-" + student.id, "alldone", "6クールすべての実習先が決まりました。お疲れ様でした！");
-    return;
+    // 全クール確定済みでも、ラウンドの進行状況（他の人の希望状況）は閲覧できるようにする
+    html += `<div class="notice confirmed">すべてのクールが確定しました。お疲れ様でした。<br/><span class="small-muted">下の表で、ほかの人の希望状況を引き続き見ることができます（閲覧のみ・選択はできません）。</span></div>`;
   }
 
   if (noRound) {
@@ -585,7 +581,17 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   let resultPrefId = null;
   let resultDetailText = "";
 
-  if (notStarted) {
+  if (allDone) {
+    // 全クール確定済み：自分の希望判定は行わず、今動いている回（なければ最後の回）を表示する
+    if (!noRound) {
+      const basePhase = (round.phase || "").replace("_processing", "");
+      displayAttempt = basePhase === "third_match" ? 3
+        : basePhase === "second_match" ? 2
+        : basePhase === "first_choice" ? 1
+        : (round.third_deadline ? 3 : (round.second_deadline ? 2 : 1));
+      attempt = displayAttempt;
+    }
+  } else if (notStarted) {
     if (!noRound) statusNotice = `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください（下の表は閲覧のみ、選択はまだできません）。</div>`;
   } else {
   const attemptLabel = { 1: "1次", 2: "2次", 3: "3次" };
@@ -726,6 +732,9 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   appEl.innerHTML = html;
   attachLodgingHandlers();
   attachCancelHandler(student);
+  if (allDone) {
+    maybeShowResultReveal("all-done-" + student.id, "alldone", "6クールすべての実習先が決まりました。お疲れ様でした！");
+  }
   if (resultAnimation) {
     maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
   }
@@ -960,7 +969,9 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
 
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
-  const isMyOwnFilledCourse = filledCourses.has(courseNumber);
+  // 全クール確定済みの学生は「閲覧専用」：全列をグレーアウトせず、通常の見た目で表示する
+  const viewOnlyAllDone = filledCourses.size >= 6;
+  const isMyOwnFilledCourse = !viewOnlyAllDone && filledCourses.has(courseNumber);
 
   const isMine = !!(myPref && myPref.slot_id === slot.id &&
     (myPref.course_number === courseNumber || myPref.paired_course_number === courseNumber) &&
@@ -1033,7 +1044,8 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   let eligible = !isMyOwnFilledCourse && canEdit && comboEligible(counts, combo, feasible);
 
   let cls = "cell-slot";
-  if (isMyOwnFilledCourse) cls += " cell-other-term";
+  if (viewOnlyAllDone) { /* 閲覧専用：色は変えない */ }
+  else if (isMyOwnFilledCourse) cls += " cell-other-term";
   else if (eligible) cls += " cell-open";
   else cls += " cell-ineligible";
 
