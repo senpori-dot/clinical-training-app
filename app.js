@@ -316,6 +316,76 @@ function ensureModalRoot() {
 function closeFacilityModal() {
   const root = document.getElementById("facility-modal-root");
   if (root) root.innerHTML = "";
+  // 結果発表などの後に表示待ちのお願いポップアップがあれば、閉じた直後に表示する
+  if (window.__pendingPopup) {
+    const fn = window.__pendingPopup;
+    window.__pendingPopup = null;
+    setTimeout(fn, 200);
+  }
+}
+
+// ============================================================
+// 院外内科についてのお願いポップアップ（ラウンド・回ごとに1回だけ表示）
+// ============================================================
+function exnNeedRange(counts) {
+  // まだ成立しうる配分ごとに「院外内科があと何枠必要か」を出し、最小(必須数)と最大(取れる上限)を返す
+  const feasible = feasiblePatterns(counts);
+  if (feasible.length === 0) return { min: 0, max: 0 };
+  const rest = feasible.map(a => Math.max(0, (3 - a) - counts.EX_N));
+  return { min: Math.min(...rest), max: Math.max(...rest) };
+}
+
+function showExnPopup(kind, roundNumber) {
+  ensureModalRoot();
+  const root = document.getElementById("facility-modal-root");
+  const cfg = kind === "must"
+    ? {
+        bg: "#fdf1ec", color: "#b3413a", emoji: "🙏",
+        title: "院外・内科系についてのお願い",
+        body: `あなたはまだ「院外・内科系」を1つも取っていません。\n\n院外内科は残り枠がかなり少なく、特に①〜③クールは取り合いになっています。院外内科を取れないと3:3のルールを満たせなくなるおそれがあるため、なるべく今回（第${roundNumber}希望）で院外内科を選んでいただけると助かります。`,
+      }
+    : {
+        bg: "#eef4fb", color: "#1c3a5e", emoji: "🤝",
+        title: "院外・内科系についてのお願い",
+        body: `あなたはすでに「院外・内科系」を取っていて、3:3のルールを満たすうえで、これ以上の院外内科は必須ではありません。\n\n院外内科は残り枠が少なく、まだ1つも取れていない人や必須の人が多くいます。できれば院内・内科系や院外・外科系を優先して選んでもらえると助かります。`,
+      };
+  root.innerHTML = `
+    <div class="modal-backdrop reveal-backdrop" id="exn-backdrop">
+      <div class="reveal-box" style="background:${cfg.bg};">
+        <div class="reveal-emoji">${cfg.emoji}</div>
+        <div class="reveal-title" style="color:${cfg.color};">${cfg.title}</div>
+        <div class="reveal-detail" style="text-align:left;">${esc(cfg.body)}</div>
+        <button class="secondary" id="exn-close-btn">わかりました</button>
+      </div>
+    </div>
+  `;
+  document.getElementById("exn-close-btn").onclick = closeFacilityModal;
+}
+
+function maybeShowExnPopup(student, round, attempt, counts, hasExempt) {
+  if (!round) return;
+  const range = exnNeedRange(counts);
+  let kind = null;
+  if (counts.EX_N === 0) {
+    kind = "must"; // 院外内科を1つも取っていない＝必ず1つ以上必要
+  } else if (!hasExempt && range.min === 0 && range.max > 0) {
+    kind = "optional"; // 取っていて、これ以上は必須ではないが、まだ取れる状態
+  }
+  if (!kind) return;
+
+  const key = `exn_popup_${student.id}_${round.id}_${attempt}_${kind}`;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+  } catch (e) { /* 保存できなくても表示はする */ }
+
+  const show = () => showExnPopup(kind, round.round_number);
+  const root = document.getElementById("facility-modal-root");
+  if (root && root.innerHTML.trim()) {
+    window.__pendingPopup = show; // 結果発表が出ている場合は、閉じた後に表示
+  } else {
+    show();
+  }
 }
 function openFacilityModal(info) {
   ensureModalRoot();
@@ -737,6 +807,9 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
   if (resultAnimation) {
     maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
+  }
+  if (canEdit && !allDone) {
+    maybeShowExnPopup(student, round, attempt, counts, assignments.some(a => a.count_exempt));
   }
   if (countdownTarget) {
     startCountdown(countdownTarget);
