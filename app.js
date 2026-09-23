@@ -364,14 +364,9 @@ function showExnPopup(kind, roundNumber) {
 
 function maybeShowExnPopup(student, round, attempt, counts, hasExempt) {
   if (!round) return;
-  const range = exnNeedRange(counts);
-  let kind = null;
-  if (counts.EX_N === 0) {
-    kind = "must"; // 院外内科を1つも取っていない＝必ず1つ以上必要
-  } else if (!hasExempt && range.min === 0 && range.max > 0) {
-    kind = "optional"; // 取っていて、これ以上は必須ではないが、まだ取れる状態
-  }
-  if (!kind) return;
+  // 院外内科を1つも取っていない人（＝必ず1つ以上必要）にだけ表示する
+  if (counts.EX_N !== 0) return;
+  const kind = "must";
 
   const key = `exn_popup_${student.id}_${round.id}_${attempt}_${kind}`;
   try {
