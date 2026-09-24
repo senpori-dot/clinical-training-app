@@ -26,6 +26,10 @@ function requiresLodging(slot) {
   return acc.includes("○");
 }
 
+function isKuroshioSlot(slot) {
+  return slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
+}
+
 function needsLodgingReminder(slot) {
   const isKuroshio = slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
   return requiresLodging(slot) && !isKuroshio;
@@ -451,6 +455,18 @@ async function main() {
 
   const { data: lodgingSettings } = await sb.from("lodging_settings").select("*").eq("id", 1).maybeSingle();
 
+  // 希望調査で確定した枠（=黒潮プロジェクトの事前割り当てではない枠）の一覧
+  const { data: myConfirmedPrefs } = await sb
+    .from("preferences")
+    .select("slot_id, course_number, paired_course_number")
+    .eq("student_id", student.id)
+    .eq("status", "confirmed");
+  window.__myConfirmedKeys = new Set();
+  (myConfirmedPrefs || []).forEach(p => {
+    window.__myConfirmedKeys.add(p.slot_id + "_" + p.course_number);
+    if (p.paired_course_number) window.__myConfirmedKeys.add(p.slot_id + "_" + p.paired_course_number);
+  });
+
   renderApp(student, round, assignments || [], lodgingSettings);
 }
 
@@ -560,7 +576,12 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
 
   // 宿泊が必要な確定先について、宿泊するかどうかの回答を求める（未回答があると分かりやすいよう、上部に表示）
-  const lodgingNeeded = assignments.filter(a => requiresLodging(a.slots) && !a.slots.department_name.includes("黒潮医療人養成プロジェクト") && !a.slots.facility_name.includes("黒潮医療人養成プロジェクト"));
+  const lodgingNeeded = assignments.filter(a => {
+    if (!requiresLodging(a.slots)) return false;
+    if (!isKuroshioSlot(a.slots)) return true;
+    // 黒潮の行でも、希望調査で確定した枠（追加枠）なら宿泊回答が必要
+    return !!(window.__myConfirmedKeys && window.__myConfirmedKeys.has(a.slot_id + "_" + a.course_number));
+  });
   if (lodgingNeeded.length > 0) {
     const deadline = lodgingSettings && lodgingSettings.deadline;
     const deadlinePassed = deadline && Date.now() > new Date(deadline).getTime();
@@ -703,7 +724,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   if (myPref && myPref.status === "confirmed") {
     canEdit = false;
     const wonLottery = myPref.won_lottery === true;
-    const lodgingNote = needsLodgingReminder(myPref.slots) ? "\n\nこの施設は宿泊が必要です。画面上の「宿泊するかどうかの回答」から回答をお願いします。" : "";
+    const lodgingNote = requiresLodging(myPref.slots) ? "\n\nこの施設は宿泊が必要です。画面上の「宿泊するかどうかの回答」から回答をお願いします。" : "";
     const roundWord = attempt === 1 ? "" : `${attemptLabel[attempt]}希望で`;
     statusNotice = `<div class="notice success">🎉 おめでとうございます！${roundWord}${window.COURSE_LABELS[myPref.course_number-1]}「${esc(myPref.slots.facility_name)} ${esc(myPref.slots.department_name)}」に確定しました。次のラウンドをお待ちください。${lodgingNote ? `<br/><b>${esc(lodgingNote.trim())}</b>` : ""}</div>`;
     resultAnimation = wonLottery ? "win" : "smooth";
@@ -975,7 +996,8 @@ function renderFullGrid(institutionType, label, slots, roundPrefs, allAssignment
       ? `<div class="facility-limit-badge">🛈 施設全体1クールあたり最大${limit.max_total}名まで${isNanwakayama ? '(6名時、男女3:3は自動回避)' : ''}</div>`
       : "";
     const isKuroshioRow = s.department_name.includes("黒潮医療人養成プロジェクト") || s.facility_name.includes("黒潮医療人養成プロジェクト");
-    const lodgingBadge = (!isKuroshioRow && requiresLodging(s)) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
+    const hasNewCourses = Array.isArray(s.new_courses) && s.new_courses.length > 0;
+    const lodgingBadge = ((!isKuroshioRow || hasNewCourses) && requiresLodging(s)) ? `<div class="lodging-badge">🏨 宿泊あり：氏名を最初から表示</div>` : "";
     const dormBadge = s.facility_name.includes("南和歌山医療") ? `<div class="lodging-badge">🏨 宿舎:1人部屋2室+4人部屋1室(計6人まで／病院全体の人数上限ではありません)</div>` : "";
     const pairingBadge = s.department_name.includes("病理診断") ? `<div class="pairing-badge">🔗 2ターム連続で取る必要があります</div>` : "";
     rows += `<tr class="${rowClass} ${facilityChanged ? 'facility-start' : ''}"><td class="dept-col facility-tap" data-facility="${esc(s.facility_name)}"><b class="facility-name">${esc(s.facility_name)}</b><br/>${esc(s.department_name)}${limitBadge}${lodgingBadge}${dormBadge}${pairingBadge}</td>`;
@@ -1028,7 +1050,14 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   if (cap <= 0) {
     return `<td class="cell-slot cell-blocked">×</td>`;
   }
-  if (isKuroshio) {
+  // 後から追加された枠（slots.new_courses に入っているクール）には NEW マークを付ける
+  const isNewSlot = Array.isArray(slot.new_courses) && slot.new_courses.map(Number).includes(courseNumber);
+  const newBadge = isNewSlot
+    ? `<div><span style="display:inline-block;font-size:0.55rem;font-weight:800;color:#fff;background:#e0443a;padding:0 5px;border-radius:999px;line-height:1.5;letter-spacing:0.05em;">NEW</span></div>`
+    : "";
+
+  // 黒潮の行は基本選択不可。ただし追加枠(NEW)があるクールだけは一般の学生も選べる
+  if (isKuroshio && !isNewSlot) {
     const kuroshioConfirmed = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
     const kuroshioNames = kuroshioConfirmed.map(a => `<b>${esc(a.students.name)}</b>`).join("<br>");
     return `<td class="cell-slot cell-blocked">
@@ -1037,11 +1066,6 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
 
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
-  // 後から追加された枠（slots.new_courses に入っているクール）には NEW マークを付ける
-  const isNewSlot = Array.isArray(slot.new_courses) && slot.new_courses.map(Number).includes(courseNumber);
-  const newBadge = isNewSlot
-    ? `<div><span style="display:inline-block;font-size:0.55rem;font-weight:800;color:#fff;background:#e0443a;padding:0 5px;border-radius:999px;line-height:1.5;letter-spacing:0.05em;">NEW</span></div>`
-    : "";
   // 全クール確定済みの学生は「閲覧専用」：全列をグレーアウトせず、通常の見た目で表示する
   const viewOnlyAllDone = filledCourses.size >= 6;
   const isMyOwnFilledCourse = !viewOnlyAllDone && filledCourses.has(courseNumber);
@@ -1071,7 +1095,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const lodging = requiresLodging(slot);
 
   function lodgingTag(a) {
-    if (!lodging) return "";
+    if (!lodging || isKuroshio) return "";
     if (a.lodging_choice === "yes") return ` <span class="lodge-tag lodge-yes">(宿泊する)</span>`;
     if (a.lodging_choice === "no") return ` <span class="lodge-tag lodge-no">(宿泊しない)</span>`;
     return ` <span class="lodge-tag lodge-unanswered">(未回答)</span>`;
