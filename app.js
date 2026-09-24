@@ -321,11 +321,44 @@ function closeFacilityModal() {
   const root = document.getElementById("facility-modal-root");
   if (root) root.innerHTML = "";
   // 結果発表などの後に表示待ちのお願いポップアップがあれば、閉じた直後に表示する
-  if (window.__pendingPopup) {
-    const fn = window.__pendingPopup;
-    window.__pendingPopup = null;
+  if (window.__popupQueue && window.__popupQueue.length > 0) {
+    const fn = window.__popupQueue.shift();
     setTimeout(fn, 200);
   }
+}
+
+// 他のモーダルが開いていれば閉じた後に、開いていなければすぐに表示する（複数あれば順番に）
+function showOrQueuePopup(fn) {
+  ensureModalRoot();
+  const root = document.getElementById("facility-modal-root");
+  window.__popupQueue = window.__popupQueue || [];
+  if (root && root.innerHTML.trim()) window.__popupQueue.push(fn);
+  else fn();
+}
+
+// 第4希望：院外がまだ3つ揃っていない人は院外しか選べないことを知らせるポップアップ（回ごとに1回）
+function maybeShowForceExternalPopup(student, round, attempt, externalCount) {
+  const key = `force_ext_popup_${student.id}_${round.id}_${attempt}`;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+  } catch (e) { /* 保存できなくても表示はする */ }
+  const rest = 3 - externalCount;
+  showOrQueuePopup(() => {
+    const root = document.getElementById("facility-modal-root");
+    const body = `あなたはまだ院外が${externalCount}/3で、あと${rest}つ院外を取る必要があります。\n\n第${round.round_number}希望では（2次マッチングも含めて）、院外がまだ3つ揃っていない人は院外の枠しか選べません。表の院内の枠はタップできなくなっています。`;
+    root.innerHTML = `
+      <div class="modal-backdrop reveal-backdrop" id="forceext-backdrop">
+        <div class="reveal-box" style="background:#fdf1ec;">
+          <div class="reveal-emoji">🚑</div>
+          <div class="reveal-title" style="color:#b3413a;">今回は院外のみ選択できます</div>
+          <div class="reveal-detail" style="text-align:left;">${esc(body)}</div>
+          <button class="secondary" id="forceext-close-btn">わかりました</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("forceext-close-btn").onclick = closeFacilityModal;
+  });
 }
 
 // ============================================================
@@ -378,13 +411,7 @@ function maybeShowExnPopup(student, round, attempt, counts, hasExempt) {
     localStorage.setItem(key, "1");
   } catch (e) { /* 保存できなくても表示はする */ }
 
-  const show = () => showExnPopup(kind, round.round_number);
-  const root = document.getElementById("facility-modal-root");
-  if (root && root.innerHTML.trim()) {
-    window.__pendingPopup = show; // 結果発表が出ている場合は、閉じた後に表示
-  } else {
-    show();
-  }
+  showOrQueuePopup(() => showExnPopup(kind, round.round_number));
 }
 function openFacilityModal(info) {
   ensureModalRoot();
@@ -798,6 +825,12 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   // 1次で確定済みの学生も、2次・3次マッチングが進行中ならその様子を見られるようにする。
   displayAttempt = openAttempt || attempt;
   }
+  // 第4希望（2次・3次マッチング含む）：院外がまだ3つ揃っていない人は院外しか選べない
+  const forceExternal = !!(round && round.round_number === 4 && !allDone && instCounts.external < 3);
+  window.__forceExternal = forceExternal;
+  if (forceExternal && canEdit) {
+    statusNotice += `<div class="notice warn">第4希望では、院外がまだ3つ揃っていない人は<b>院外の枠しか選べません</b>（あなたは院外 ${instCounts.external}/3）。院内の枠はタップできません。</div>`;
+  }
   html += statusNotice;
 
   if (resultAnimation) {
@@ -823,6 +856,9 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
   if (resultAnimation) {
     maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
+  }
+  if (canEdit && forceExternal) {
+    maybeShowForceExternalPopup(student, round, attempt, instCounts.external);
   }
   if (canEdit && !allDone) {
     maybeShowExnPopup(student, round, attempt, counts, assignments.some(a => a.count_exempt));
@@ -1139,7 +1175,8 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
 
   const combo = comboKeyOf(slot);
   // 自分がこのクールを既に確定している場合は、他の情報は見えるが選択操作だけできないようにする
-  let eligible = !isMyOwnFilledCourse && canEdit && comboEligible(counts, combo, feasible);
+  let eligible = !isMyOwnFilledCourse && canEdit && comboEligible(counts, combo, feasible)
+    && (!window.__forceExternal || slot.institution_type === "external");
 
   let cls = "cell-slot";
   if (viewOnlyAllDone) { /* 閲覧専用：色は変えない */ }

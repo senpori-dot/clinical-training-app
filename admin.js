@@ -34,6 +34,78 @@ async function checkAuth() {
   };
 }
 
+// ============================================================
+// 詰み判定（3:3ルールを満たして6クールを揃えられる空き枠が残っているか）
+// ・確定済みの人数だけで判定（今回の希望者との取り合いは考えない＝最善ケース）
+// ・黒潮の行は追加枠(NEW)のクールだけ、留学は対象外、施設全体の上限も考慮
+// ============================================================
+function stuckComboKey(x) {
+  return (x.institution_type === "internal" ? "IN" : "EX") + "_" + (x.category === "internal_medicine" ? "N" : "G");
+}
+function stuckIsKuroshio(s) {
+  return (s.department_name || "").includes("黒潮医療人養成プロジェクト") || (s.facility_name || "").includes("黒潮医療人養成プロジェクト");
+}
+function stuckIsAbroad(s) {
+  const n = s.facility_name || "";
+  return n.startsWith("留学(") || n.startsWith("留学（");
+}
+// slots: 有効な枠, assignRows: 全員の確定 [{slot_id, course_number}], limitMap: {施設名: max_total}
+function buildStuckAvailability(slots, assignRows, limitMap) {
+  const slotById = {};
+  slots.forEach(s => { slotById[s.id] = s; });
+  const used = {}, facUsed = {};
+  (assignRows || []).forEach(a => {
+    used[a.slot_id + "_" + a.course_number] = (used[a.slot_id + "_" + a.course_number] || 0) + 1;
+    const s = slotById[a.slot_id];
+    if (s) facUsed[s.facility_name + "_" + a.course_number] = (facUsed[s.facility_name + "_" + a.course_number] || 0) + 1;
+  });
+  const avail = {};
+  for (let c = 1; c <= 6; c++) avail[c] = { IN_N: false, IN_G: false, EX_N: false, EX_G: false };
+  for (const s of slots) {
+    if (s.active === false || stuckIsAbroad(s)) continue;
+    const kuro = stuckIsKuroshio(s);
+    for (let c = 1; c <= 6; c++) {
+      const cap = s["cap_" + c] || 0;
+      if (cap <= 0) continue;
+      if (kuro && !(Array.isArray(s.new_courses) && s.new_courses.map(Number).includes(c))) continue;
+      if ((used[s.id + "_" + c] || 0) >= cap) continue;
+      const lim = limitMap[s.facility_name];
+      if (lim != null && (facUsed[s.facility_name + "_" + c] || 0) >= lim) continue;
+      avail[c][stuckComboKey(s)] = true;
+    }
+  }
+  return avail;
+}
+// myAssigns: [{course_number, count_exempt, institution_type, category}]
+function isStudentStuck(myAssigns, avail) {
+  const keys = ["IN_N", "IN_G", "EX_N", "EX_G"];
+  const counts = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+  let inN = 0, exN = 0;
+  const filled = new Set();
+  for (const a of myAssigns) {
+    filled.add(a.course_number);
+    if (a.institution_type === "internal") inN++; else exN++;
+    if (!a.count_exempt) counts[stuckComboKey(a)]++;
+  }
+  if (filled.size >= 6) return false;
+  const open = [1, 2, 3, 4, 5, 6].filter(c => !filled.has(c));
+  const targets = [1, 2].map(a => ({ IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a }));
+  function dfs(i, inCnt, exCnt) {
+    if (inCnt > 3 || exCnt > 3) return false;
+    if (!targets.some(t => keys.every(k => counts[k] <= t[k]))) return false;
+    if (i === open.length) return inCnt === 3 && exCnt === 3 && keys.every(k => counts[k] >= 1);
+    for (const k of keys) {
+      if (!avail[open[i]][k]) continue;
+      counts[k]++;
+      const ok = dfs(i + 1, inCnt + (k.startsWith("IN") ? 1 : 0), exCnt + (k.startsWith("EX") ? 1 : 0));
+      counts[k]--;
+      if (ok) return true;
+    }
+    return false;
+  }
+  return !dfs(0, inN, exN);
+}
+
 let activeTab = "students";
 
 async function renderDashboard() {
@@ -44,6 +116,7 @@ async function renderDashboard() {
       <button data-tab="matching" class="${activeTab==='matching'?'active':''}">集計・抽選</button>
       <button data-tab="lodging" class="${activeTab==='lodging'?'active':''}">宿泊希望</button>
       <button data-tab="trade" class="${activeTab==='trade'?'active':''}">トレード</button>
+      <button data-tab="stuck" class="${activeTab==='stuck'?'active':''}">詰み確認</button>
     </div>
     <div id="tab-content"><p>読み込み中...</p></div>
   `;
@@ -54,7 +127,69 @@ async function renderDashboard() {
   else if (activeTab === "rounds") renderRoundsTab();
   else if (activeTab === "matching") renderMatchingTab();
   else if (activeTab === "lodging") renderLodgingTab();
+  else if (activeTab === "stuck") renderStuckTab();
   else renderTradeTab();
+}
+
+// ============================================================
+// 詰み確認：3:3ルールを満たせる空き枠が残っていない学生の一覧
+// ============================================================
+async function renderStuckTab() {
+  const el = document.getElementById("tab-content");
+  const { data: slots } = await sb.from("slots").select("*").eq("active", true);
+  const { data: limits } = await sb.from("facility_limits").select("*");
+  const { data: students } = await sb.from("students").select("id, attendance_number, name").order("attendance_number");
+  const { data: assigns } = await sb.from("assignments").select("student_id, slot_id, course_number, count_exempt");
+
+  const lim = {};
+  (limits || []).forEach(f => { lim[f.facility_name] = f.max_total; });
+  const slotById = {};
+  (slots || []).forEach(s => { slotById[s.id] = s; });
+  // 無効化された枠に確定している人も正しく数えるため、確定先の枠情報は全件から引く
+  const { data: allSlots } = await sb.from("slots").select("id, institution_type, category, facility_name, department_name");
+  const anySlot = {};
+  (allSlots || []).forEach(s => { anySlot[s.id] = s; });
+
+  const avail = buildStuckAvailability(slots || [], assigns || [], lim);
+  const byStudent = {};
+  (assigns || []).forEach(a => { (byStudent[a.student_id] = byStudent[a.student_id] || []).push(a); });
+
+  const rows = [];
+  for (const st of (students || [])) {
+    const mine = (byStudent[st.id] || []).map(a => {
+      const s = anySlot[a.slot_id] || {};
+      return { course_number: a.course_number, count_exempt: a.count_exempt, institution_type: s.institution_type, category: s.category, label: (s.facility_name || "") + " " + (s.department_name || "") };
+    });
+    if (mine.length >= 6) continue;
+    if (!isStudentStuck(mine, avail)) continue;
+    const c = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+    mine.forEach(m => { if (!m.count_exempt) c[stuckComboKey(m)]++; });
+    const filledSet = new Set(mine.map(m => m.course_number));
+    const openList = [1, 2, 3, 4, 5, 6].filter(x => !filledSet.has(x)).map(x => window.COURSE_LABELS[x - 1]).join(" ");
+    rows.push(`<tr>
+      <td>${st.attendance_number}</td>
+      <td>${esc(st.name)}</td>
+      <td>${c.IN_N}/${c.IN_G}/${c.EX_N}/${c.EX_G}${mine.some(m => m.count_exempt) ? "<br/><span class='small-muted'>留学枠あり</span>" : ""}</td>
+      <td>${mine.length}/6</td>
+      <td>${esc(openList)}</td>
+    </tr>`);
+  }
+
+  el.innerHTML = `
+    <div class="card">
+      <b>詰み確認（${rows.length}人）</b>
+      <p class="small-muted">今の確定状況と空き枠から見て、3:3ルールを満たして6クールを揃える組み合わせが1つも残っていない学生です。今回の希望者との取り合いは考えない「最善ケース」での判定なので、ここに出ていなくても抽選次第で詰む可能性はあります。黒潮の行は追加枠(NEW)のクールのみ、留学枠は対象外として計算しています。</p>
+      ${rows.length === 0 ? `<p>現在、詰んでいる学生はいません。</p>` : `
+      <div style="overflow-x:auto;">
+        <table class="slots">
+          <thead><tr><th>番号</th><th>氏名</th><th>院内内/院内外/院外内/院外外</th><th>確定</th><th>空きクール</th></tr></thead>
+          <tbody>${rows.join("")}</tbody>
+        </table>
+      </div>`}
+      <button class="small secondary" id="stuck-reload" style="margin-top:10px;">再計算</button>
+    </div>
+  `;
+  document.getElementById("stuck-reload").onclick = renderStuckTab;
 }
 
 // ============================================================
