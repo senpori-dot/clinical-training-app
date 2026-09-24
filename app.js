@@ -1037,6 +1037,11 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
 
   const confirmedHere = allAssignments.filter(a => a.slot_id === slot.id && a.course_number === courseNumber);
+  // 後から追加された枠（slots.new_courses に入っているクール）には NEW マークを付ける
+  const isNewSlot = Array.isArray(slot.new_courses) && slot.new_courses.map(Number).includes(courseNumber);
+  const newBadge = isNewSlot
+    ? `<div><span style="display:inline-block;font-size:0.55rem;font-weight:800;color:#fff;background:#e0443a;padding:0 5px;border-radius:999px;line-height:1.5;letter-spacing:0.05em;">NEW</span></div>`
+    : "";
   // 全クール確定済みの学生は「閲覧専用」：全列をグレーアウトせず、通常の見た目で表示する
   const viewOnlyAllDone = filledCourses.size >= 6;
   const isMyOwnFilledCourse = !viewOnlyAllDone && filledCourses.has(courseNumber);
@@ -1101,6 +1106,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   if (confirmedFull || facilityConfirmedFull) {
     const label = confirmedFull ? "満員(確定)" : "施設全体満員(確定)";
     return `<td class="cell-slot cell-other-term">
+      ${newBadge}
       <div class="cell-cap">${totalCount}/${cap}</div>
       <div class="cell-names">${label}</div>
       ${confirmedNamesHtml ? `<div class="cell-names">${confirmedNamesHtml}</div>` : ""}
@@ -1138,6 +1144,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   if (pendingHere.length > 0 && (isOverFull || facilityOver)) overNote = `<div class="cell-names" style="color:#b3413a;">定員超過中</div>`;
 
   return `<td class="${cls}" ${dataAttrs}>
+    ${newBadge}
     <div class="cell-cap">${totalCount}/${cap}</div>
     ${namesHtml ? `<div class="cell-names">${namesHtml}</div>` : ""}
     ${overNote}

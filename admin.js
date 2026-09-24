@@ -129,12 +129,24 @@ async function renderLodgingTab() {
 
   const { data: assignments } = await sb
     .from("assignments")
-    .select("id, course_number, lodging_choice, students(attendance_number, name), slots(facility_name, department_name, facility_accommodation, accommodation)");
+    .select("id, student_id, slot_id, course_number, lodging_choice, students(attendance_number, name), slots(facility_name, department_name, facility_accommodation, accommodation)");
+
+  // 希望調査で確定した枠のキー（黒潮の行でも、追加枠で一般学生が取ったものは宿泊回答の対象にする）
+  const { data: confirmedPrefs } = await sb
+    .from("preferences")
+    .select("student_id, slot_id, course_number, paired_course_number")
+    .eq("status", "confirmed");
+  const confirmedKeys = new Set();
+  (confirmedPrefs || []).forEach(p => {
+    confirmedKeys.add(p.student_id + "_" + p.slot_id + "_" + p.course_number);
+    if (p.paired_course_number) confirmedKeys.add(p.student_id + "_" + p.slot_id + "_" + p.paired_course_number);
+  });
 
   const lodgingRows = (assignments || []).filter(a => {
     const acc = a.slots.facility_accommodation || a.slots.accommodation || "";
     const isKuroshio = a.slots.department_name.includes("黒潮医療人養成プロジェクト") || a.slots.facility_name.includes("黒潮医療人養成プロジェクト");
-    return acc.includes("○") && !isKuroshio;
+    const viaPreference = confirmedKeys.has(a.student_id + "_" + a.slot_id + "_" + a.course_number);
+    return acc.includes("○") && (!isKuroshio || viaPreference);
   }).sort((a, b) => a.course_number - b.course_number || a.students.attendance_number - b.students.attendance_number);
 
   const choiceLabel = { yes: "宿泊する", no: "宿泊しない" };
