@@ -26,11 +26,12 @@ function requiresLodging(slot) {
   return acc.includes("○");
 }
 
-// 地域枠・県民枠（黒潮PJ）の学生は【一般枠】を選べず、【地・県枠】は地域枠・県民枠の学生だけが選べる
+// 地域枠・県民枠（黒潮PJ）の学生は【一般枠】を選べず、【地・県枠】は地域枠・県民枠の学生だけが選べる。【一般枠可能】は全員選べる
 function quotaAllows(slot, quota) {
   const dep = (slot && slot.department_name) || "";
   if (dep.includes("【地・県枠】")) return !!quota;
-  if (dep.includes("【一般枠")) return !quota;
+  if (dep.includes("【一般枠可能】")) return true; // 一般枠可能は全員選べる
+  if (dep.includes("【一般枠】")) return !quota;
   return true;
 }
 
