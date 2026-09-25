@@ -26,6 +26,14 @@ function requiresLodging(slot) {
   return acc.includes("○");
 }
 
+// 地域枠・県民枠（黒潮PJ）の学生は【一般枠】を選べず、【地・県枠】は地域枠・県民枠の学生だけが選べる
+function quotaAllows(slot, quota) {
+  const dep = (slot && slot.department_name) || "";
+  if (dep.includes("【地・県枠】")) return !!quota;
+  if (dep.includes("【一般枠")) return !quota;
+  return true;
+}
+
 // ============================================================
 // 詰み判定（3:3ルールを満たして6クールを揃えられる空き枠が残っているか）
 // ・確定済みの人数だけで判定（今回の希望者との取り合いは考えない＝最善ケース）
@@ -42,7 +50,7 @@ function stuckIsAbroad(s) {
   return n.startsWith("留学(") || n.startsWith("留学（");
 }
 // slots: 有効な枠, assignRows: 全員の確定 [{slot_id, course_number}], limitMap: {施設名: max_total}
-function buildStuckAvailability(slots, assignRows, limitMap) {
+function buildStuckAvailability(slots, assignRows, limitMap, allowFn) {
   const slotById = {};
   slots.forEach(s => { slotById[s.id] = s; });
   const used = {}, facUsed = {};
@@ -55,6 +63,7 @@ function buildStuckAvailability(slots, assignRows, limitMap) {
   for (let c = 1; c <= 6; c++) avail[c] = { IN_N: false, IN_G: false, EX_N: false, EX_G: false };
   for (const s of slots) {
     if (s.active === false || stuckIsAbroad(s)) continue;
+    if (allowFn && !allowFn(s)) continue;
     const kuro = stuckIsKuroshio(s);
     for (let c = 1; c <= 6; c++) {
       const cap = s["cap_" + c] || 0;
@@ -96,6 +105,16 @@ function isStudentStuck(myAssigns, avail) {
     return false;
   }
   return !dfs(0, inN, exN);
+}
+
+// ラウンドの表示名（キャンペーンなど特別なラウンドは title を使う）
+function roundLabel(r) {
+  return (r && r.title) ? r.title : `第${r ? r.round_number : "?"}希望`;
+}
+// キャンペーンラウンドの参加資格：院外外科を2つ取っていて、院外が3つ揃っている人
+function isCampaignEligible(round, counts, instCounts) {
+  if (!round || round.eligibility !== "ext_surgery_2") return true;
+  return counts.EX_G >= 2 && instCounts.external >= 3;
 }
 
 function isKuroshioSlot(slot) {
@@ -150,7 +169,8 @@ async function openScheduleModal() {
     if (e.target.id === "schedule-backdrop") closeFacilityModal();
   });
 
-  const { data: rounds } = await sb.from("rounds").select("*").order("round_number");
+  const { data: rounds0 } = await sb.from("rounds").select("*");
+  const rounds = (rounds0 || []).slice().sort((a, b) => (a.display_order ?? a.round_number) - (b.display_order ?? b.round_number));
   const contentEl = document.getElementById("schedule-content");
   if (!contentEl) return; // モーダルが閉じられていたら何もしない
 
@@ -176,7 +196,7 @@ async function openScheduleModal() {
     }
     return `
     <tr>
-      <td><b>第${r.round_number}希望</b></td>
+      <td><b>${esc(roundLabel(r))}</b></td>
       <td>${statusHtml}</td>
       <td class="small-muted">
         開始: ${r.start_at ? fmtDate(r.start_at) : "未定"}<br/>
@@ -442,7 +462,7 @@ function maybeShowForceExternalPopup(student, round, attempt, externalCount) {
   const rest = 3 - externalCount;
   showOrQueuePopup(() => {
     const root = document.getElementById("facility-modal-root");
-    const body = `あなたはまだ院外が${externalCount}/3で、あと${rest}つ院外を取る必要があります。\n\n第${round.round_number}希望では（2次マッチングも含めて）、院外がまだ3つ揃っていない人は院外の枠しか選べません。表の院内の枠はタップできなくなっています。`;
+    const body = `あなたはまだ院外が${externalCount}/3で、あと${rest}つ院外を取る必要があります。\n\n${roundLabel(round)}では（2次マッチングも含めて）、院外がまだ3つ揃っていない人は院外の枠しか選べません。表の院内の枠はタップできなくなっています。`;
     root.innerHTML = `
       <div class="modal-backdrop reveal-backdrop" id="forceext-backdrop">
         <div class="reveal-box" style="background:#fdf1ec;">
@@ -475,7 +495,7 @@ function showExnPopup(kind, roundNumber) {
     ? {
         bg: "#fdf1ec", color: "#b3413a", emoji: "🙏",
         title: "院外・内科系についてのお願い",
-        body: `あなたはまだ「院外・内科系」を1つも取っていません。\n\n院外内科は残り枠がかなり少なく、特に①〜③クールは取り合いになっています。院外内科を取れないと3:3のルールを満たせなくなるおそれがあるため、なるべく今回（第${roundNumber}希望）で院外内科を選んでいただけると助かります。`,
+        body: `あなたはまだ「院外・内科系」を1つも取っていません。\n\n院外内科は残り枠がかなり少なく、特に①〜③クールは取り合いになっています。院外内科を取れないと3:3のルールを満たせなくなるおそれがあるため、なるべく今回（${roundNumber}）で院外内科を選んでいただけると助かります。`,
       }
     : {
         bg: "#eef4fb", color: "#1c3a5e", emoji: "🤝",
@@ -507,7 +527,7 @@ function maybeShowExnPopup(student, round, attempt, counts, hasExempt) {
     localStorage.setItem(key, "1");
   } catch (e) { /* 保存できなくても表示はする */ }
 
-  showOrQueuePopup(() => showExnPopup(kind, round.round_number));
+  showOrQueuePopup(() => showExnPopup(kind, roundLabel(round)));
 }
 function openFacilityModal(info) {
   ensureModalRoot();
@@ -561,6 +581,7 @@ async function main() {
   }
 
   headerEl.textContent = `${student.name}（出席番号 ${student.attendance_number}）`;
+  window.__myQuota = student.kuroshio_quota || null; // '地' or '県'（黒潮PJの地域枠・県民枠）
   ensureRefreshButton();
 
   const { data: round0 } = await sb
@@ -676,10 +697,15 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   // ラウンドが終了していて、次のラウンドの開始日時がもう入力されていれば、そのカウントダウンを表示する
   let nextRoundNotice = "";
   if (!noRound && round.phase === "closed") {
-    const { data: nextRound } = await sb.from("rounds").select("start_at, round_number").eq("round_number", round.round_number + 1).maybeSingle();
+    // 表示順（display_order）で次に来るラウンドを探す（キャンペーンなどの特別ラウンドも含む）
+    const { data: allRoundsForNext } = await sb.from("rounds").select("start_at, round_number, title, display_order");
+    const curOrder = round.display_order ?? round.round_number;
+    const nextRound = (allRoundsForNext || [])
+      .filter(r => (r.display_order ?? r.round_number) > curOrder)
+      .sort((a, b) => (a.display_order ?? a.round_number) - (b.display_order ?? b.round_number))[0];
     if (nextRound && nextRound.start_at && now < new Date(nextRound.start_at)) {
       countdownTarget = nextRound.start_at;
-      countdownLabel = `第${nextRound.round_number}希望 開始まで`;
+      countdownLabel = `${roundLabel(nextRound)} 開始まで`;
     } else {
       nextRoundNotice = `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>`;
     }
@@ -687,7 +713,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   if (!noRound) {
     html += `<div class="round-hero">
-      <div class="round-hero-title">第${round.round_number}希望 － ${notStarted0 ? "開始前" : (phaseWordMap[round.phase] || round.phase)}</div>
+      <div class="round-hero-title">${esc(roundLabel(round))} － ${notStarted0 ? "開始前" : (phaseWordMap[round.phase] || round.phase)}</div>
       ${countdownTarget ? `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>` : (nextRoundNotice || (!notStarted0 && (round.phase === "second_match" && secondEnded0) || (round.phase === "third_match" && thirdEnded0) || (round.phase === "first_choice" && firstEnded0) ? `<div class="small-muted">まもなく自動で抽選が行われます。</div>` : ""))}
       <div class="small-muted" style="margin-top:6px;">
         開始: ${round.start_at ? fmtDate(round.start_at) : "-"}　
@@ -921,6 +947,15 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   // 1次で確定済みの学生も、2次・3次マッチングが進行中ならその様子を見られるようにする。
   displayAttempt = openAttempt || attempt;
   }
+  // キャンペーンラウンド：対象者以外は閲覧のみ
+  const campaignIneligible = !!(round && round.eligibility === "ext_surgery_2" && !allDone && !isCampaignEligible(round, counts, instCounts));
+  if (campaignIneligible) {
+    canEdit = false;
+    statusNotice = `<div class="notice info">「${esc(roundLabel(round))}」は、<b>院外外科を2つ取っていて、院外が3つ揃っている人</b>だけが参加できるラウンドです。あなたは対象外のため、表は閲覧のみです。次のラウンドをお待ちください。</div>`;
+  } else if (round && round.eligibility === "ext_surgery_2" && !allDone && canEdit) {
+    statusNotice = `<div class="notice success">🎁 院外外科を2つ取って院外内科を譲ってくれてありがとうございます！このラウンドは対象者だけが参加できる特別ラウンドです。</div>` + statusNotice;
+  }
+
   // 第4希望（2次・3次マッチング含む）：院外がまだ3つ揃っていない人は院外しか選べない
   const forceExternal = !!(round && round.round_number === 4 && !allDone && instCounts.external < 3);
   window.__forceExternal = forceExternal;
@@ -1029,7 +1064,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   if (!allDone) {
     const lim = {};
     Object.keys(limitMap).forEach(k => { lim[k] = limitMap[k].max_total; });
-    const avail = buildStuckAvailability(slots || [], allAssignments || [], lim);
+    const avail = buildStuckAvailability(slots || [], allAssignments || [], lim, s => quotaAllows(s, window.__myQuota));
     const mine = assignments.map(a => ({
       course_number: a.course_number, count_exempt: a.count_exempt,
       institution_type: a.slots.institution_type, category: a.slots.category,
@@ -1044,12 +1079,25 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     const votedCount = new Set((roundPrefs || []).map(p => p.student_id)).size;
 
     const { data: allStudents } = await sb.from("students").select("id");
-    const { data: myAssignCounts } = await sb.from("assignments").select("student_id");
+    const { data: myAssignCounts } = await sb.from("assignments").select("student_id, slot_id, count_exempt");
     const cnt = {};
     (myAssignCounts || []).forEach(a => { cnt[a.student_id] = (cnt[a.student_id] || 0) + 1; });
     const totalStudents = (allStudents || []).length;
     const doneCount = (allStudents || []).filter(s => (cnt[s.id] || 0) >= 6).length;
     let targetCount = totalStudents - doneCount; // このラウンド開始時点で参加すべきだった人数
+    if (round.eligibility === "ext_surgery_2") {
+      // キャンペーン：院外外科2つ・院外3つの人だけが対象
+      const slotInfo = {};
+      (slots || []).forEach(s => { slotInfo[s.id] = s; });
+      const exG = {}, ext = {};
+      (myAssignCounts || []).forEach(a => {
+        const s = slotInfo[a.slot_id];
+        if (!s || s.institution_type !== "external") return;
+        ext[a.student_id] = (ext[a.student_id] || 0) + 1;
+        if (s.category === "surgery" && !a.count_exempt) exG[a.student_id] = (exG[a.student_id] || 0) + 1;
+      });
+      targetCount = (allStudents || []).filter(s => (cnt[s.id] || 0) < 6 && (exG[s.id] || 0) >= 2 && (ext[s.id] || 0) >= 3).length;
+    }
 
     // 2次・3次では、前の回で「確定した人」を毎回差し引く。
     // 落選した人だけでなく、投票し忘れた人・キャンセルした人も自動的に対象人数に残る。
@@ -1287,6 +1335,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   const combo = comboKeyOf(slot);
   // 自分がこのクールを既に確定している場合は、他の情報は見えるが選択操作だけできないようにする
   let eligible = !isMyOwnFilledCourse && canEdit && comboEligible(counts, combo, feasible)
+    && quotaAllows(slot, window.__myQuota)
     && (!window.__forceExternal || slot.institution_type === "external");
 
   let cls = "cell-slot";

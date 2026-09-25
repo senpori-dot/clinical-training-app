@@ -34,6 +34,15 @@ async function checkAuth() {
   };
 }
 
+// 地域枠・県民枠（黒潮PJ）の学生は【一般枠】を選べず、【地・県枠】は地域枠・県民枠の学生だけが選べる。【一般枠可能】は全員選べる
+function quotaAllows(slot, quota) {
+  const dep = (slot && slot.department_name) || "";
+  if (dep.includes("【地・県枠】")) return !!quota;
+  if (dep.includes("【一般枠可能】")) return true; // 一般枠可能は全員選べる
+  if (dep.includes("【一般枠】")) return !quota;
+  return true;
+}
+
 // ============================================================
 // 詰み判定（3:3ルールを満たして6クールを揃えられる空き枠が残っているか）
 // ・確定済みの人数だけで判定（今回の希望者との取り合いは考えない＝最善ケース）
@@ -50,7 +59,7 @@ function stuckIsAbroad(s) {
   return n.startsWith("留学(") || n.startsWith("留学（");
 }
 // slots: 有効な枠, assignRows: 全員の確定 [{slot_id, course_number}], limitMap: {施設名: max_total}
-function buildStuckAvailability(slots, assignRows, limitMap) {
+function buildStuckAvailability(slots, assignRows, limitMap, allowFn) {
   const slotById = {};
   slots.forEach(s => { slotById[s.id] = s; });
   const used = {}, facUsed = {};
@@ -63,6 +72,7 @@ function buildStuckAvailability(slots, assignRows, limitMap) {
   for (let c = 1; c <= 6; c++) avail[c] = { IN_N: false, IN_G: false, EX_N: false, EX_G: false };
   for (const s of slots) {
     if (s.active === false || stuckIsAbroad(s)) continue;
+    if (allowFn && !allowFn(s)) continue;
     const kuro = stuckIsKuroshio(s);
     for (let c = 1; c <= 6; c++) {
       const cap = s["cap_" + c] || 0;
@@ -145,7 +155,7 @@ async function renderStuckTab() {
   const el = document.getElementById("tab-content");
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
   const { data: limits } = await sb.from("facility_limits").select("*");
-  const { data: students } = await sb.from("students").select("id, attendance_number, name").order("attendance_number");
+  const { data: students } = await sb.from("students").select("id, attendance_number, name, kuroshio_quota").order("attendance_number");
   const { data: assigns } = await sb.from("assignments").select("student_id, slot_id, course_number, count_exempt");
 
   const lim = {};
@@ -157,7 +167,9 @@ async function renderStuckTab() {
   const anySlot = {};
   (allSlots || []).forEach(s => { anySlot[s.id] = s; });
 
-  const avail = buildStuckAvailability(slots || [], assigns || [], lim);
+  // 一般の学生用と、地域枠・県民枠の学生用で選べる枠が違うので、空き状況を2通り作る
+  const availGeneral = buildStuckAvailability(slots || [], assigns || [], lim, s => quotaAllows(s, null));
+  const availQuota = buildStuckAvailability(slots || [], assigns || [], lim, s => quotaAllows(s, "県"));
   const byStudent = {};
   (assigns || []).forEach(a => { (byStudent[a.student_id] = byStudent[a.student_id] || []).push(a); });
 
@@ -168,7 +180,7 @@ async function renderStuckTab() {
       return { course_number: a.course_number, count_exempt: a.count_exempt, institution_type: s.institution_type, category: s.category, label: (s.facility_name || "") + " " + (s.department_name || "") };
     });
     if (mine.length >= 6) continue;
-    if (!isStudentStuck(mine, avail)) continue;
+    if (!isStudentStuck(mine, st.kuroshio_quota ? availQuota : availGeneral)) continue;
     const c = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
     mine.forEach(m => { if (!m.count_exempt) c[stuckComboKey(m)]++; });
     const filledSet = new Set(mine.map(m => m.course_number));
