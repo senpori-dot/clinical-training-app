@@ -26,6 +26,78 @@ function requiresLodging(slot) {
   return acc.includes("○");
 }
 
+// ============================================================
+// 詰み判定（3:3ルールを満たして6クールを揃えられる空き枠が残っているか）
+// ・確定済みの人数だけで判定（今回の希望者との取り合いは考えない＝最善ケース）
+// ・黒潮の行は追加枠(NEW)のクールだけ、留学は対象外、施設全体の上限も考慮
+// ============================================================
+function stuckComboKey(x) {
+  return (x.institution_type === "internal" ? "IN" : "EX") + "_" + (x.category === "internal_medicine" ? "N" : "G");
+}
+function stuckIsKuroshio(s) {
+  return (s.department_name || "").includes("黒潮医療人養成プロジェクト") || (s.facility_name || "").includes("黒潮医療人養成プロジェクト");
+}
+function stuckIsAbroad(s) {
+  const n = s.facility_name || "";
+  return n.startsWith("留学(") || n.startsWith("留学（");
+}
+// slots: 有効な枠, assignRows: 全員の確定 [{slot_id, course_number}], limitMap: {施設名: max_total}
+function buildStuckAvailability(slots, assignRows, limitMap) {
+  const slotById = {};
+  slots.forEach(s => { slotById[s.id] = s; });
+  const used = {}, facUsed = {};
+  (assignRows || []).forEach(a => {
+    used[a.slot_id + "_" + a.course_number] = (used[a.slot_id + "_" + a.course_number] || 0) + 1;
+    const s = slotById[a.slot_id];
+    if (s) facUsed[s.facility_name + "_" + a.course_number] = (facUsed[s.facility_name + "_" + a.course_number] || 0) + 1;
+  });
+  const avail = {};
+  for (let c = 1; c <= 6; c++) avail[c] = { IN_N: false, IN_G: false, EX_N: false, EX_G: false };
+  for (const s of slots) {
+    if (s.active === false || stuckIsAbroad(s)) continue;
+    const kuro = stuckIsKuroshio(s);
+    for (let c = 1; c <= 6; c++) {
+      const cap = s["cap_" + c] || 0;
+      if (cap <= 0) continue;
+      if (kuro && !(Array.isArray(s.new_courses) && s.new_courses.map(Number).includes(c))) continue;
+      if ((used[s.id + "_" + c] || 0) >= cap) continue;
+      const lim = limitMap[s.facility_name];
+      if (lim != null && (facUsed[s.facility_name + "_" + c] || 0) >= lim) continue;
+      avail[c][stuckComboKey(s)] = true;
+    }
+  }
+  return avail;
+}
+// myAssigns: [{course_number, count_exempt, institution_type, category}]
+function isStudentStuck(myAssigns, avail) {
+  const keys = ["IN_N", "IN_G", "EX_N", "EX_G"];
+  const counts = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+  let inN = 0, exN = 0;
+  const filled = new Set();
+  for (const a of myAssigns) {
+    filled.add(a.course_number);
+    if (a.institution_type === "internal") inN++; else exN++;
+    if (!a.count_exempt) counts[stuckComboKey(a)]++;
+  }
+  if (filled.size >= 6) return false;
+  const open = [1, 2, 3, 4, 5, 6].filter(c => !filled.has(c));
+  const targets = [1, 2].map(a => ({ IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a }));
+  function dfs(i, inCnt, exCnt) {
+    if (inCnt > 3 || exCnt > 3) return false;
+    if (!targets.some(t => keys.every(k => counts[k] <= t[k]))) return false;
+    if (i === open.length) return inCnt === 3 && exCnt === 3 && keys.every(k => counts[k] >= 1);
+    for (const k of keys) {
+      if (!avail[open[i]][k]) continue;
+      counts[k]++;
+      const ok = dfs(i + 1, inCnt + (k.startsWith("IN") ? 1 : 0), exCnt + (k.startsWith("EX") ? 1 : 0));
+      counts[k]--;
+      if (ok) return true;
+    }
+    return false;
+  }
+  return !dfs(0, inN, exN);
+}
+
 function isKuroshioSlot(slot) {
   return slot.department_name.includes("黒潮医療人養成プロジェクト") || slot.facility_name.includes("黒潮医療人養成プロジェクト");
 }
@@ -334,6 +406,30 @@ function showOrQueuePopup(fn) {
   window.__popupQueue = window.__popupQueue || [];
   if (root && root.innerHTML.trim()) window.__popupQueue.push(fn);
   else fn();
+}
+
+// 詰みの人へのお知らせポップアップ（ラウンドごとに1回）
+function maybeShowStuckPopup(student, round) {
+  const key = `stuck_popup_${student.id}_${round ? round.id : "none"}`;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+  } catch (e) { /* 保存できなくても表示はする */ }
+  showOrQueuePopup(() => {
+    const root = document.getElementById("facility-modal-root");
+    const body = "現在、3:3のルールを満たして6クールを揃えられる空き枠が残っていない状態です。\n\n全ラウンドが終わった後に個別に対応しますので、しばらくお待ちください。";
+    root.innerHTML = `
+      <div class="modal-backdrop reveal-backdrop" id="stuck-backdrop">
+        <div class="reveal-box" style="background:#f3f3f3;">
+          <div class="reveal-emoji">🙇</div>
+          <div class="reveal-title" style="color:#b3413a;">空き枠についてのお知らせ</div>
+          <div class="reveal-detail" style="text-align:left;">${esc(body)}</div>
+          <button class="secondary" id="stuck-close-btn">わかりました</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("stuck-close-btn").onclick = closeFacilityModal;
+  });
 }
 
 // 第4希望：院外がまだ3つ揃っていない人は院外しか選べないことを知らせるポップアップ（回ごとに1回）
@@ -928,6 +1024,21 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
 
   const globalRevealed = noRound || !round.reveal_at || now >= new Date(round.reveal_at);
+
+  // 詰み判定：3:3ルールを満たせる空き枠が全く残っていない人にはお知らせを出す
+  if (!allDone) {
+    const lim = {};
+    Object.keys(limitMap).forEach(k => { lim[k] = limitMap[k].max_total; });
+    const avail = buildStuckAvailability(slots || [], allAssignments || [], lim);
+    const mine = assignments.map(a => ({
+      course_number: a.course_number, count_exempt: a.count_exempt,
+      institution_type: a.slots.institution_type, category: a.slots.category,
+    }));
+    if (isStudentStuck(mine, avail)) {
+      appEl.insertAdjacentHTML("afterbegin", `<div class="notice warn" style="border:2px solid #b3413a;"><b>現在、3:3のルールを満たせる空き枠が残っていません。</b><br/>全ラウンドが終わった後に個別に対応しますので、しばらくお待ちください。</div>`);
+      maybeShowStuckPopup(student, round);
+    }
+  }
 
   if (!noRound) {
     const votedCount = new Set((roundPrefs || []).map(p => p.student_id)).size;

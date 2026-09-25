@@ -106,6 +106,13 @@ function isStudentStuck(myAssigns, avail) {
   return !dfs(0, inN, exN);
 }
 
+function roundLabel(r) {
+  return (r && r.title) ? r.title : `第${r ? r.round_number : "?"}希望`;
+}
+function sortRounds(list) {
+  return (list || []).slice().sort((a, b) => (a.display_order ?? a.round_number) - (b.display_order ?? b.round_number));
+}
+
 let activeTab = "students";
 
 async function renderDashboard() {
@@ -383,11 +390,12 @@ function toLocalInputValueOrEmpty(iso) {
 }
 
 async function renderRoundsTab() {
-  const { data: rounds } = await sb.from("rounds").select("*").order("round_number");
+  const { data: rounds0 } = await sb.from("rounds").select("*");
+  const rounds = sortRounds(rounds0);
 
   let rows = (rounds || []).map(r => `
     <tr>
-      <td>第${r.round_number}希望</td>
+      <td>${esc(roundLabel(r))}${r.eligibility === "ext_surgery_2" ? `<br/><span class="small-muted">対象：院外外科2・院外3の人</span>` : ""}</td>
       <td>${r.phase}</td>
       <td class="small-muted">
         開始:${r.start_at ? new Date(r.start_at).toLocaleString("ja-JP") : "-"}<br/>
@@ -399,6 +407,17 @@ async function renderRoundsTab() {
       <td>
         ${!r.is_current ? `<button class="small set-current" data-id="${r.id}">現在にする</button>` : ""}
         ${r.phase === "closed" && !r.third_deadline ? `<button class="small secondary start-third" data-id="${r.id}">3次マッチングを追加</button>` : ""}
+        <div style="margin-top:6px; padding:8px; background:#f4f6f8; border-radius:8px;">
+          <label class="small-muted">開始</label>
+          <input type="datetime-local" class="time-start-input" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.start_at)}" />
+          <label class="small-muted">1次締切</label>
+          <input type="datetime-local" class="time-end-input" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.end_at)}" />
+          <label class="small-muted">2次締切</label>
+          <input type="datetime-local" class="time-second-input" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.second_deadline)}" />
+          ${("third_deadline" in r) ? `<label class="small-muted">3次締切（使う場合のみ）</label>
+          <input type="datetime-local" class="time-third-input" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.third_deadline)}" />` : ""}
+          <button class="small save-times" data-id="${r.id}">日程を保存</button>
+        </div>
         <div style="margin-top:6px;">
           <label class="small-muted">キャンセル受付 開始</label>
           <input type="datetime-local" class="cancel-start-input" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.cancel_window_start)}" />
@@ -409,7 +428,8 @@ async function renderRoundsTab() {
       </td>
     </tr>`).join("");
 
-  const nextRoundNumber = rounds && rounds.length ? Math.max(...rounds.map(r=>r.round_number)) + 1 : 1;
+  const normalRounds = (rounds || []).filter(r => !r.title);
+  const nextRoundNumber = normalRounds.length ? Math.max(...normalRounds.map(r=>r.round_number)) + 1 : 1;
 
   document.getElementById("tab-content").innerHTML = `
     <div class="card">
@@ -473,6 +493,32 @@ async function renderRoundsTab() {
     };
   });
 
+  document.querySelectorAll(".save-times").forEach(b => {
+    b.onclick = async () => {
+      const id = b.dataset.id;
+      const val = cls => {
+        const el = document.querySelector(`.${cls}[data-id="${id}"]`);
+        return el && el.value ? new Date(el.value).toISOString() : null;
+      };
+      const update = {
+        start_at: val("time-start-input"),
+        end_at: val("time-end-input"),
+        second_deadline: val("time-second-input"),
+      };
+      if (document.querySelector(`.time-third-input[data-id="${id}"]`)) update.third_deadline = val("time-third-input");
+      if (update.start_at && update.end_at && new Date(update.end_at) <= new Date(update.start_at)) {
+        alert("1次締切は開始より後にしてください。"); return;
+      }
+      if (update.end_at && update.second_deadline && new Date(update.second_deadline) <= new Date(update.end_at)) {
+        alert("2次締切は1次締切より後にしてください。"); return;
+      }
+      const { error } = await sb.from("rounds").update(update).eq("id", id);
+      if (error) { alert("保存に失敗しました: " + error.message); return; }
+      alert("日程を保存しました。");
+      renderRoundsTab();
+    };
+  });
+
   document.querySelectorAll(".save-cancel-window").forEach(b => {
     b.onclick = async () => {
       const id = b.dataset.id;
@@ -495,6 +541,7 @@ async function renderRoundsTab() {
     await sb.from("rounds").update({ is_current: false }).neq("id", "00000000-0000-0000-0000-000000000000");
     await sb.from("rounds").insert({
       round_number: nextRoundNumber,
+      display_order: nextRoundNumber,
       course_number: null,
       start_at: startVal ? new Date(startVal).toISOString() : null,
       end_at: endVal ? new Date(endVal).toISOString() : null,
@@ -568,7 +615,7 @@ async function renderMatchingTab() {
   // ===== キャンセル履歴（全ラウンド共通） =====
   const { data: cancelledPrefs } = await sb
     .from("preferences")
-    .select("*, students(attendance_number, name), slots(facility_name, department_name), rounds(round_number)")
+    .select("*, students(attendance_number, name), slots(facility_name, department_name), rounds(round_number, title)")
     .eq("cancelled", true)
     .order("created_at", { ascending: false });
 
@@ -582,7 +629,7 @@ async function renderMatchingTab() {
           ${cancelledPrefs.map(p => `
             <tr>
               <td>${p.students.attendance_number} ${esc(p.students.name)}</td>
-              <td>第${p.rounds.round_number}希望</td>
+              <td>${esc(roundLabel(p.rounds))}</td>
               <td>${window.COURSE_LABELS[p.course_number-1]}</td>
               <td>${esc(p.slots.facility_name)} ${esc(p.slots.department_name)}</td>
             </tr>
@@ -677,7 +724,7 @@ async function renderMatchingTab() {
     ${gridHtml}
     <div class="card">
       <div class="flex-between">
-        <b>第${round.round_number}希望（${attempt===3?'3次マッチング':attempt===2?'2次マッチング':'1次'}）の集計</b>
+        <b>${esc(roundLabel(round))}（${attempt===3?'3次マッチング':attempt===2?'2次マッチング':'1次'}）の集計</b>
         <span class="small-muted">状態: ${round.phase}</span>
       </div>
       <p class="small-muted">${relevantDeadline ? `締切: ${new Date(relevantDeadline).toLocaleString("ja-JP")}${deadlinePassed ? '（締切超過 — 通常は自動で抽選されます）' : '（締切前は自由に希望を出せます。定員オーバーもOK）'}` : "締切未設定"}</p>
