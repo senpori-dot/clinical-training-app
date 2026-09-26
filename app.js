@@ -983,15 +983,17 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   // 第4希望（2次・3次マッチング含む）：院外がまだ3つ揃っていない人は院外しか選べない
   const forceExternal = !!(round && round.round_number === 4 && !allDone && instCounts.external < 3);
-  // 第4希望（2次・3次マッチング含む）：院外内科が必要なのに足りていない人は院外内科しか選べない
+  // 院外内科が必要なのに足りていない人は院外内科しか選べない
   //  ・院内外科を2つ取っていて、院外内科が2つに満たない人
   //  ・院外内科をまだ1つも取っていない人
-  const forceExtNaika = !!(round && round.round_number === 4 && !allDone
+  // 第4希望以降（キャンペーン・第5・第6希望も含む）で適用。院外内科が必要数に達したら自動で外れる
+  const roundOrder = round ? (round.display_order ?? round.round_number) : 0;
+  const forceExtNaika = !!(round && roundOrder >= 4 && !allDone
     && ((counts.IN_G === 2 && counts.EX_N < 2) || counts.EX_N === 0));
   window.__forceExternal = forceExternal;
   window.__forceExtNaika = forceExtNaika;
   if (forceExtNaika && canEdit) {
-    statusNotice += `<div class="notice warn">第4希望では、あなたは<b>院外・内科系の枠しか選べません</b>（院外内科が3:3ルールの必要数に足りていないため）。それ以外の枠はタップできません。</div>`;
+    statusNotice += `<div class="notice warn">あなたは<b>院外・内科系の枠しか選べません</b>（院外内科が3:3ルールの必要数に足りていないため）。それ以外の枠はタップできません。</div>`;
   } else if (forceExternal && canEdit) {
     statusNotice += `<div class="notice warn">第4希望では、院外がまだ3つ揃っていない人は<b>院外の枠しか選べません</b>（あなたは院外 ${instCounts.external}/3）。院内の枠はタップできません。</div>`;
   }
