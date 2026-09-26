@@ -1044,6 +1044,8 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     && ((counts.IN_G === 2 && counts.EX_N < 2) || counts.EX_N === 0));
   window.__forceExternal = forceExternal;
   window.__forceExtNaika = forceExtNaika;
+  // 院内・院外がすでに3つ揃っている人は、そちらをもう選べない（留学・黒潮の枠も院内/院外として数える）
+  window.__instFull = { internal: instCounts.internal >= 3, external: instCounts.external >= 3 };
   if (forceExtNaika && canEdit) {
     statusNotice += `<div class="notice warn">あなたは<b>院外・内科系の枠しか選べません</b>（院外内科が3:3ルールの必要数に足りていないため）。それ以外の枠はタップできません。</div>`;
   } else if (forceExternal && canEdit) {
@@ -1438,6 +1440,7 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   // 自分がこのクールを既に確定している場合は、他の情報は見えるが選択操作だけできないようにする
   let eligible = !isMyOwnFilledCourse && canEdit && comboEligible(counts, combo, feasible)
     && quotaAllows(slot, window.__myQuota)
+    && !(window.__instFull && window.__instFull[slot.institution_type])
     && (!window.__forceExternal || slot.institution_type === "external")
     && (!window.__forceExtNaika || (slot.institution_type === "external" && slot.category === "internal_medicine"));
 
