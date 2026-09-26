@@ -429,13 +429,22 @@ function showOrQueuePopup(fn) {
   else fn();
 }
 
+// ポップアップは同じ内容を3時間ごとに再表示する（前回表示から3時間たっていなければ出さない）
+const POPUP_INTERVAL_MS = 3 * 60 * 60 * 1000;
+function popupDue(key) {
+  const k = "v2_" + key; // 実験で出したものはリセットし、この版から数え直す
+  try {
+    const last = Number(localStorage.getItem(k) || 0);
+    if (last && Date.now() - last < POPUP_INTERVAL_MS) return false;
+    localStorage.setItem(k, String(Date.now()));
+  } catch (e) { /* 保存できなくても表示はする */ }
+  return true;
+}
+
 // 詰みの人へのお知らせポップアップ（ラウンドごとに1回）
 function maybeShowStuckPopup(student, round) {
   const key = `stuck_popup_${student.id}_${round ? round.id : "none"}`;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-  } catch (e) { /* 保存できなくても表示はする */ }
+  if (!popupDue(key)) return;
   showOrQueuePopup(() => {
     const root = document.getElementById("facility-modal-root");
     const body = "現在、3:3のルールを満たして6クールを揃えられる空き枠が残っていない状態です。\n\n全ラウンドが終わった後に個別に対応しますので、しばらくお待ちください。";
@@ -456,16 +465,12 @@ function maybeShowStuckPopup(student, round) {
 // 第4希望：院外外科を2つ取ってくれた人へのお礼ポップアップ（回ごとに1回）
 function maybeShowCampaignThanksPopup(student, round, attempt, onlyExtNaika) {
   const key = `campaign_thanks_popup_${student.id}_${round.id}_${attempt}`;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-  } catch (e) { /* 保存できなくても表示はする */ }
+  if (!popupDue(key)) return;
   showOrQueuePopup(() => {
     const root = document.getElementById("facility-modal-root");
-    let body = `院外・外科系を先行して2つ選んでいただき、ありがとうございます！\n\n${roundLabel(round)}では何を選んでいただいても、このラウンドが終了した後に、ひと枠先行して決められる枠をプレゼントします。`;
-    if (onlyExtNaika) {
-      body += `\n\n※ただしあなたは院外・内科系がまだ足りていないため、今回は院外・内科系の枠のみ選択できます。`;
-    }
+    const body = onlyExtNaika
+      ? `院外・外科系を先行して2つ選んでいただき、ありがとうございます！\n\nあなたは3:3のルール上、院外・内科系があと1つ必要なため、${roundLabel(round)}では院外・内科系の枠のみ選択できます。\n\n院外・内科系を取っていただければ、このラウンドが終了した後に、ひと枠先行して決められる枠をプレゼントします。`
+      : `院外・外科系を先行して2つ選んでいただき、ありがとうございます！\n\n${roundLabel(round)}では何を選んでいただいても、このラウンドが終了した後に、ひと枠先行して決められる枠をプレゼントします。`;
     root.innerHTML = `
       <div class="modal-backdrop reveal-backdrop" id="thanks-backdrop">
         <div class="reveal-box" style="background:linear-gradient(135deg,#fff8e1,#ffe9b3);">
@@ -484,10 +489,7 @@ function maybeShowCampaignThanksPopup(student, round, attempt, onlyExtNaika) {
 // 第4希望：院外外科を取ればキャンペーンで1枠先行して決められることを案内するポップアップ（回ごとに1回）
 function maybeShowCampaignInvitePopup(student, round, attempt) {
   const key = `campaign_invite_popup_${student.id}_${round.id}_${attempt}`;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-  } catch (e) { /* 保存できなくても表示はする */ }
+  if (!popupDue(key)) return;
   showOrQueuePopup(() => {
     const root = document.getElementById("facility-modal-root");
     const body = `あなたは今、院外・内科系と院外・外科系を1つずつ取っています。\n\n今回の${roundLabel(round)}で「院外・外科系」を取っていただけたら、次の「院外外科2個取ってくれてありがとうキャンペーン」に参加でき、ほかの人より先に1枠決められるチャンスがあります。\n\n院外内科は残り枠が少なく、必要としている人が多いため、ご協力いただけると助かります。`;
@@ -508,10 +510,7 @@ function maybeShowCampaignInvitePopup(student, round, attempt) {
 // 第4希望：院外内科が足りていない人に、院外内科しか選べないことを知らせるポップアップ（回ごとに1回）
 function maybeShowForceExtNaikaPopup(student, round, attempt) {
   const key = `force_extnaika_popup_${student.id}_${round.id}_${attempt}`;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-  } catch (e) { /* 保存できなくても表示はする */ }
+  if (!popupDue(key)) return;
   showOrQueuePopup(() => {
     const root = document.getElementById("facility-modal-root");
     const body = `あなたは、3:3のルールを満たすために必要な「院外・内科系」がまだ足りていません。\n\n院外内科は残り枠が少ないため、${roundLabel(round)}では（2次マッチングも含めて）院外・内科系の枠しか選べないようにしています。表のそれ以外の枠はタップできなくなっています。`;
@@ -532,10 +531,7 @@ function maybeShowForceExtNaikaPopup(student, round, attempt) {
 // 第4希望：院外がまだ3つ揃っていない人は院外しか選べないことを知らせるポップアップ（回ごとに1回）
 function maybeShowForceExternalPopup(student, round, attempt, externalCount) {
   const key = `force_ext_popup_${student.id}_${round.id}_${attempt}`;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-  } catch (e) { /* 保存できなくても表示はする */ }
+  if (!popupDue(key)) return;
   const rest = 3 - externalCount;
   showOrQueuePopup(() => {
     const root = document.getElementById("facility-modal-root");
@@ -599,10 +595,7 @@ function maybeShowExnPopup(student, round, attempt, counts, hasExempt) {
   const kind = "must";
 
   const key = `exn_popup_${student.id}_${round.id}_${attempt}_${kind}`;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-  } catch (e) { /* 保存できなくても表示はする */ }
+  if (!popupDue(key)) return;
 
   showOrQueuePopup(() => showExnPopup(kind, roundLabel(round)));
 }
