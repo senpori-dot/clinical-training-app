@@ -453,6 +453,58 @@ function maybeShowStuckPopup(student, round) {
   });
 }
 
+// 第4希望：院外外科を2つ取ってくれた人へのお礼ポップアップ（回ごとに1回）
+function maybeShowCampaignThanksPopup(student, round, attempt, onlyExtNaika) {
+  const key = `campaign_thanks_popup_${student.id}_${round.id}_${attempt}`;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+  } catch (e) { /* 保存できなくても表示はする */ }
+  showOrQueuePopup(() => {
+    const root = document.getElementById("facility-modal-root");
+    let body = `院外・外科系を先行して2つ選んでいただき、ありがとうございます！\n\n${roundLabel(round)}では何を選んでいただいても、このラウンドが終了した後に、ひと枠先行して決められる枠をプレゼントします。`;
+    if (onlyExtNaika) {
+      body += `\n\n※ただしあなたは院外・内科系がまだ足りていないため、今回は院外・内科系の枠のみ選択できます。`;
+    }
+    root.innerHTML = `
+      <div class="modal-backdrop reveal-backdrop" id="thanks-backdrop">
+        <div class="reveal-box" style="background:linear-gradient(135deg,#fff8e1,#ffe9b3);">
+          <div class="confetti">${["🎉","🎁","✨","🎊"].map((e,i)=>`<span style="--i:${i}">${e}</span>`).join("")}</div>
+          <div class="reveal-emoji">🎁</div>
+          <div class="reveal-title" style="color:#a86a00;">ありがとうございます！</div>
+          <div class="reveal-detail" style="text-align:left;">${esc(body)}</div>
+          <button class="secondary" id="thanks-close-btn">わかりました</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("thanks-close-btn").onclick = closeFacilityModal;
+  });
+}
+
+// 第4希望：院外外科を取ればキャンペーンで1枠先行して決められることを案内するポップアップ（回ごとに1回）
+function maybeShowCampaignInvitePopup(student, round, attempt) {
+  const key = `campaign_invite_popup_${student.id}_${round.id}_${attempt}`;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+  } catch (e) { /* 保存できなくても表示はする */ }
+  showOrQueuePopup(() => {
+    const root = document.getElementById("facility-modal-root");
+    const body = `あなたは今、院外・内科系と院外・外科系を1つずつ取っています。\n\n今回の${roundLabel(round)}で「院外・外科系」を取っていただけたら、次の「院外外科2個取ってくれてありがとうキャンペーン」に参加でき、ほかの人より先に1枠決められるチャンスがあります。\n\n院外内科は残り枠が少なく、必要としている人が多いため、ご協力いただけると助かります。`;
+    root.innerHTML = `
+      <div class="modal-backdrop reveal-backdrop" id="invite-backdrop">
+        <div class="reveal-box" style="background:linear-gradient(135deg,#fff8e1,#ffe9b3);">
+          <div class="reveal-emoji">🎁</div>
+          <div class="reveal-title" style="color:#a86a00;">院外外科を選ぶとチャンスがあります</div>
+          <div class="reveal-detail" style="text-align:left;">${esc(body)}</div>
+          <button class="secondary" id="invite-close-btn">わかりました</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("invite-close-btn").onclick = closeFacilityModal;
+  });
+}
+
 // 第4希望：院外内科が足りていない人に、院外内科しか選べないことを知らせるポップアップ（回ごとに1回）
 function maybeShowForceExtNaikaPopup(student, round, attempt) {
   const key = `force_extnaika_popup_${student.id}_${round.id}_${attempt}`;
@@ -1027,6 +1079,19 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     maybeShowForceExtNaikaPopup(student, round, attempt);
   } else if (canEdit && forceExternal) {
     maybeShowForceExternalPopup(student, round, attempt, instCounts.external);
+  }
+  // 第4希望：すでに院外外科を2つ取っている人（南さんを除く）にお礼とキャンペーンの案内
+  if (round && round.round_number === 4 && !allDone
+      && counts.EX_G >= 2
+      && !/^南/.test((student.name || "").trim())) {
+    maybeShowCampaignThanksPopup(student, round, attempt, forceExtNaika);
+  }
+  // 第4希望：院外内科1・院外外科1の人（佐伯さん・谷口さんを除く）に、院外外科を取ればキャンペーンで先行できることを案内
+  if (round && round.round_number === 4 && !allDone && !forceExtNaika
+      && counts.EX_N === 1 && counts.EX_G === 1
+      && comboEligible(counts, "EX_G", feasible)
+      && !/^(佐伯|谷口)/.test((student.name || "").trim())) {
+    maybeShowCampaignInvitePopup(student, round, attempt);
   }
   if (canEdit && !allDone && !forceExtNaika) {
     maybeShowExnPopup(student, round, attempt, counts, assignments.some(a => a.count_exempt));
