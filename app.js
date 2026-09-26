@@ -113,8 +113,15 @@ function roundLabel(r) {
   return (r && r.title) ? r.title : `第${r ? r.round_number : "?"}希望`;
 }
 // キャンペーンラウンドの参加資格：院外外科を2つ取っていて、院外が3つ揃っている人
-function isCampaignEligible(round, counts, instCounts) {
+// キャンペーンの対象から個別に外す人（留学などで院外外科が元々揃っていた人：浦野さん・関口さん・生駒さん）
+const CAMPAIGN_EXCLUDED_SURNAMES = ["浦野", "関口", "生駒"];
+function isCampaignExcluded(name) {
+  const n = (name || "").trim();
+  return CAMPAIGN_EXCLUDED_SURNAMES.some(x => n.startsWith(x));
+}
+function isCampaignEligible(round, counts, instCounts, student) {
   if (!round || round.eligibility !== "ext_surgery_2") return true;
+  if (student && isCampaignExcluded(student.name)) return false;
   return counts.EX_G >= 2 && instCounts.external >= 3;
 }
 
@@ -1018,7 +1025,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   displayAttempt = openAttempt || attempt;
   }
   // キャンペーンラウンド：対象者以外は閲覧のみ
-  const campaignIneligible = !!(round && round.eligibility === "ext_surgery_2" && !allDone && !isCampaignEligible(round, counts, instCounts));
+  const campaignIneligible = !!(round && round.eligibility === "ext_surgery_2" && !allDone && !isCampaignEligible(round, counts, instCounts, student));
   if (campaignIneligible) {
     canEdit = false;
     statusNotice = `<div class="notice info">「${esc(roundLabel(round))}」は、<b>院外外科を2つ取っていて、院外が3つ揃っている人</b>だけが参加できるラウンドです。あなたは対象外のため、表は閲覧のみです。次のラウンドをお待ちください。</div>`;
@@ -1078,7 +1085,8 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   // 第4希望：すでに院外外科を2つ取っている人（南さんを除く）にお礼とキャンペーンの案内
   if (round && round.round_number === 4 && !allDone
       && counts.EX_G >= 2
-      && !/^南/.test((student.name || "").trim())) {
+      && !/^南/.test((student.name || "").trim())
+      && !isCampaignExcluded(student.name)) {
     maybeShowCampaignThanksPopup(student, round, attempt, forceExtNaika);
   }
   // 第4希望：院外内科1・院外外科1の人（佐伯さん・谷口さんを除く）に、院外外科を取ればキャンペーンで先行できることを案内
@@ -1175,7 +1183,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   if (!noRound) {
     const votedCount = new Set((roundPrefs || []).map(p => p.student_id)).size;
 
-    const { data: allStudents } = await sb.from("students").select("id");
+    const { data: allStudents } = await sb.from("students").select("id, name");
     const { data: myAssignCounts } = await sb.from("assignments").select("student_id, slot_id, count_exempt");
     const cnt = {};
     (myAssignCounts || []).forEach(a => { cnt[a.student_id] = (cnt[a.student_id] || 0) + 1; });
@@ -1193,7 +1201,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
         ext[a.student_id] = (ext[a.student_id] || 0) + 1;
         if (s.category === "surgery" && !a.count_exempt) exG[a.student_id] = (exG[a.student_id] || 0) + 1;
       });
-      targetCount = (allStudents || []).filter(s => (cnt[s.id] || 0) < 6 && (exG[s.id] || 0) >= 2 && (ext[s.id] || 0) >= 3).length;
+      targetCount = (allStudents || []).filter(s => (cnt[s.id] || 0) < 6 && (exG[s.id] || 0) >= 2 && (ext[s.id] || 0) >= 3 && !isCampaignExcluded(s.name)).length;
     }
 
     // 2次・3次では、前の回で「確定した人」を毎回差し引く。
