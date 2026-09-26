@@ -453,6 +453,30 @@ function maybeShowStuckPopup(student, round) {
   });
 }
 
+// 第4希望：院外内科が足りていない人に、院外内科しか選べないことを知らせるポップアップ（回ごとに1回）
+function maybeShowForceExtNaikaPopup(student, round, attempt) {
+  const key = `force_extnaika_popup_${student.id}_${round.id}_${attempt}`;
+  try {
+    if (localStorage.getItem(key)) return;
+    localStorage.setItem(key, "1");
+  } catch (e) { /* 保存できなくても表示はする */ }
+  showOrQueuePopup(() => {
+    const root = document.getElementById("facility-modal-root");
+    const body = `あなたは、3:3のルールを満たすために必要な「院外・内科系」がまだ足りていません。\n\n院外内科は残り枠が少ないため、${roundLabel(round)}では（2次マッチングも含めて）院外・内科系の枠しか選べないようにしています。表のそれ以外の枠はタップできなくなっています。`;
+    root.innerHTML = `
+      <div class="modal-backdrop reveal-backdrop" id="forcenaika-backdrop">
+        <div class="reveal-box" style="background:#fdf1ec;">
+          <div class="reveal-emoji">🏥</div>
+          <div class="reveal-title" style="color:#b3413a;">今回は院外・内科系のみ選択できます</div>
+          <div class="reveal-detail" style="text-align:left;">${esc(body)}</div>
+          <button class="secondary" id="forcenaika-close-btn">わかりました</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("forcenaika-close-btn").onclick = closeFacilityModal;
+  });
+}
+
 // 第4希望：院外がまだ3つ揃っていない人は院外しか選べないことを知らせるポップアップ（回ごとに1回）
 function maybeShowForceExternalPopup(student, round, attempt, externalCount) {
   const key = `force_ext_popup_${student.id}_${round.id}_${attempt}`;
@@ -959,8 +983,16 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   // 第4希望（2次・3次マッチング含む）：院外がまだ3つ揃っていない人は院外しか選べない
   const forceExternal = !!(round && round.round_number === 4 && !allDone && instCounts.external < 3);
+  // 第4希望（2次・3次マッチング含む）：院外内科が必要なのに足りていない人は院外内科しか選べない
+  //  ・院内外科を2つ取っていて、院外内科が2つに満たない人
+  //  ・院外内科をまだ1つも取っていない人
+  const forceExtNaika = !!(round && round.round_number === 4 && !allDone
+    && ((counts.IN_G === 2 && counts.EX_N < 2) || counts.EX_N === 0));
   window.__forceExternal = forceExternal;
-  if (forceExternal && canEdit) {
+  window.__forceExtNaika = forceExtNaika;
+  if (forceExtNaika && canEdit) {
+    statusNotice += `<div class="notice warn">第4希望では、あなたは<b>院外・内科系の枠しか選べません</b>（院外内科が3:3ルールの必要数に足りていないため）。それ以外の枠はタップできません。</div>`;
+  } else if (forceExternal && canEdit) {
     statusNotice += `<div class="notice warn">第4希望では、院外がまだ3つ揃っていない人は<b>院外の枠しか選べません</b>（あなたは院外 ${instCounts.external}/3）。院内の枠はタップできません。</div>`;
   }
   html += statusNotice;
@@ -989,10 +1021,12 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   if (resultAnimation) {
     maybeShowResultReveal(resultPrefId, resultAnimation === "lose-once" ? "lose" : resultAnimation, resultDetailText);
   }
-  if (canEdit && forceExternal) {
+  if (canEdit && forceExtNaika) {
+    maybeShowForceExtNaikaPopup(student, round, attempt);
+  } else if (canEdit && forceExternal) {
     maybeShowForceExternalPopup(student, round, attempt, instCounts.external);
   }
-  if (canEdit && !allDone) {
+  if (canEdit && !allDone && !forceExtNaika) {
     maybeShowExnPopup(student, round, attempt, counts, assignments.some(a => a.count_exempt));
   }
   if (countdownTarget) {
@@ -1337,7 +1371,8 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   // 自分がこのクールを既に確定している場合は、他の情報は見えるが選択操作だけできないようにする
   let eligible = !isMyOwnFilledCourse && canEdit && comboEligible(counts, combo, feasible)
     && quotaAllows(slot, window.__myQuota)
-    && (!window.__forceExternal || slot.institution_type === "external");
+    && (!window.__forceExternal || slot.institution_type === "external")
+    && (!window.__forceExtNaika || (slot.institution_type === "external" && slot.category === "internal_medicine"));
 
   let cls = "cell-slot";
   if (viewOnlyAllDone) { /* 閲覧専用：色は変えない */ }
