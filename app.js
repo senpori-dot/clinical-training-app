@@ -113,9 +113,9 @@ function roundLabel(r) {
   return (r && r.title) ? r.title : `第${r ? r.round_number : "?"}希望`;
 }
 // キャンペーンラウンドの参加資格：院外外科を2つ取っていて、院外が3つ揃っている人
-// キャンペーンの対象から個別に外す人（留学などで院外外科が元々揃っていた人：浦野さん・関口さん・生駒さん）
-const CAMPAIGN_EXCLUDED_SURNAMES = ["浦野", "関口", "生駒"];
-const CAMPAIGN_EXCLUDED_NUMBERS = [10, 39]; // 浦野さん(10)・関口さん(39)。名前の表記ゆれ対策で番号でも判定
+// キャンペーンの対象から個別に外す人（留学などで院外外科が元々揃っていた人：浦野さん・関口さん・生駒さん・竹田さん）
+const CAMPAIGN_EXCLUDED_SURNAMES = ["浦野", "関口", "生駒", "竹田"];
+const CAMPAIGN_EXCLUDED_NUMBERS = [10, 39, 43]; // 浦野さん(10)・関口さん(39)・竹田さん(43)。名前の表記ゆれ対策で番号でも判定
 function isCampaignExcluded(nameOrStudent) {
   const st = (nameOrStudent && typeof nameOrStudent === "object") ? nameOrStudent : null;
   if (st && CAMPAIGN_EXCLUDED_NUMBERS.includes(Number(st.attendance_number))) return true;
