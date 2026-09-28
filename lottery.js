@@ -4,6 +4,11 @@
 // ラウンドは「第◯希望」というランク。学生は①〜⑥のうちまだ決まっていない
 // クールの中から自由に(実習先, クール)の組を選んで希望を出す。
 // 締切を過ぎたら、(実習先, クール)ごとに集計して定員超過分を抽選する。
+//
+// 【優先ルール】
+// その枠の種類（院内内科・院内外科・院外内科・院外外科）を「取らないと3:3ルールを満たせない人（必須の人）」を先に当選させ、
+// 「取っても取らなくてもいい人」は、必須の人が当選した後に残った枠で抽選する。
+// 必須の人どうし、必須でない人どうしの中では完全にランダム。
 window.tryRunLotteryIfDue = async function (sb, round) {
   if (!round) return round;
   const now = new Date();
@@ -46,6 +51,33 @@ window.tryRunLotteryIfDue = async function (sb, round) {
   return fresh || round;
 };
 
+// 枠の種類（院内内科 IN_N / 院内外科 IN_G / 院外内科 EX_N / 院外外科 EX_G）
+function lotteryComboKey(slot) {
+  return (slot.institution_type === "internal" ? "IN" : "EX") + "_" + (slot.category === "internal_medicine" ? "N" : "G");
+}
+
+// その学生にとって、この種類の枠が「必須」かどうか
+// ＝まだ成立しうるどの配分（内科・外科の3:3パターン）でも、この種類があと1つ以上必要
+function lotteryIsRequired(counts, comboKey) {
+  const c = counts || { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+  const keys = ["IN_N", "IN_G", "EX_N", "EX_G"];
+  const feasible = [1, 2]
+    .map(a => ({ IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a }))
+    .filter(t => keys.every(k => c[k] <= t[k]));
+  if (feasible.length === 0) return false;
+  return feasible.every(t => t[comboKey] - c[comboKey] > 0);
+}
+
+// 偏りのないシャッフル（Fisher–Yates）
+function lotteryShuffle(list) {
+  const arr = list.slice();
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 // 実際の抽選処理本体：(実習先, クール)ごと、かつ施設全体の人数上限も考慮したグローバル抽選
 // ※ 他のラウンドで既に確定している人数もベースとして考慮し、定員を絶対に超えないようにする
 window.runLotteryCore = async function (sb, round, phaseToProcess) {
@@ -67,7 +99,7 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
   // （環境によってはembed joinが失敗し、定員チェックが機能しなくなることがあったため）
   const { data: allSlots, error: slotsErr } = await sb
     .from("slots")
-    .select("id, facility_name, cap_1, cap_2, cap_3, cap_4, cap_5, cap_6");
+    .select("id, facility_name, institution_type, category, cap_1, cap_2, cap_3, cap_4, cap_5, cap_6");
   if (slotsErr) console.error("slots fetch error", slotsErr);
   const slotMap = {};
   (allSlots || []).forEach(s => { slotMap[s.id] = s; });
@@ -75,32 +107,47 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
   // 既に確定済み（他のラウンドを含む全体）の人数をベースラインとして読み込む
   const { data: existingAssignments, error: existingErr } = await sb
     .from("assignments")
-    .select("slot_id, course_number");
+    .select("student_id, slot_id, course_number, count_exempt");
   if (existingErr) console.error("assignments fetch error", existingErr);
 
   const slotCourseCount = {};
   const facilityCourseCount = {};
+  const studentCounts = {}; // 学生ごとの確定済みの種類別の数（留学のカウント対象外は除く）
   for (const a of (existingAssignments || [])) {
     const slotKey = a.slot_id + "_" + a.course_number;
     slotCourseCount[slotKey] = (slotCourseCount[slotKey] || 0) + 1;
-    const fname = slotMap[a.slot_id] && slotMap[a.slot_id].facility_name;
+    const s = slotMap[a.slot_id];
+    const fname = s && s.facility_name;
     if (fname) {
       const facKey = fname + "_" + a.course_number;
       facilityCourseCount[facKey] = (facilityCourseCount[facKey] || 0) + 1;
     }
+    if (s && !a.count_exempt) {
+      const sc = studentCounts[a.student_id] || (studentCounts[a.student_id] = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 });
+      sc[lotteryComboKey(s)]++;
+    }
   }
 
-  const shuffled = (prefs || []).slice().sort(() => Math.random() - 0.5);
+  // ランダムに並べたうえで、「必須の人」を前に持ってくる（同じグループ内の順番はランダムのまま）
+  const withPriority = lotteryShuffle(prefs || []).map(p => {
+    const s = slotMap[p.slot_id];
+    const required = s ? lotteryIsRequired(studentCounts[p.student_id], lotteryComboKey(s)) : false;
+    return { p, required };
+  });
+  const ordered = withPriority
+    .filter(x => x.required).map(x => x.p)
+    .concat(withPriority.filter(x => !x.required).map(x => x.p));
+
   let confirmedCount = 0, lostCount = 0;
 
   // 各(枠,クール)ごとの今回の希望者数を先に数えておく（抽選が発生したかどうかの判定に使う）
   const groupTotal = {};
-  for (const p of shuffled) {
+  for (const p of ordered) {
     const key = p.slot_id + "_" + p.course_number;
     groupTotal[key] = (groupTotal[key] || 0) + 1;
   }
 
-  for (const p of shuffled) {
+  for (const p of ordered) {
     const slot = slotMap[p.slot_id];
     if (!slot) { // 万一slot情報が取れなければ安全側に倒してlostにする
       await sb.from("preferences").update({ status: "lost" }).eq("id", p.id);
