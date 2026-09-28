@@ -4,11 +4,7 @@
 // ラウンドは「第◯希望」というランク。学生は①〜⑥のうちまだ決まっていない
 // クールの中から自由に(実習先, クール)の組を選んで希望を出す。
 // 締切を過ぎたら、(実習先, クール)ごとに集計して定員超過分を抽選する。
-//
-// 【優先ルール】
-// その枠の種類（院内内科・院内外科・院外内科・院外外科）を「取らないと3:3ルールを満たせない人（必須の人）」を先に当選させ、
-// 「取っても取らなくてもいい人」は、必須の人が当選した後に残った枠で抽選する。
-// 必須の人どうし、必須でない人どうしの中では完全にランダム。
+// 抽選は完全ランダム（優先ルールなし）。
 window.tryRunLotteryIfDue = async function (sb, round) {
   if (!round) return round;
   const now = new Date();
@@ -56,18 +52,6 @@ function lotteryComboKey(slot) {
   return (slot.institution_type === "internal" ? "IN" : "EX") + "_" + (slot.category === "internal_medicine" ? "N" : "G");
 }
 
-// その学生にとって、この種類の枠が「必須」かどうか
-// ＝まだ成立しうるどの配分（内科・外科の3:3パターン）でも、この種類があと1つ以上必要
-function lotteryIsRequired(counts, comboKey) {
-  const c = counts || { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
-  const keys = ["IN_N", "IN_G", "EX_N", "EX_G"];
-  const feasible = [1, 2]
-    .map(a => ({ IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a }))
-    .filter(t => keys.every(k => c[k] <= t[k]));
-  if (feasible.length === 0) return false;
-  return feasible.every(t => t[comboKey] - c[comboKey] > 0);
-}
-
 // 偏りのないシャッフル（Fisher–Yates）
 function lotteryShuffle(list) {
   const arr = list.slice();
@@ -112,7 +96,6 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
 
   const slotCourseCount = {};
   const facilityCourseCount = {};
-  const studentCounts = {}; // 学生ごとの確定済みの種類別の数（留学のカウント対象外は除く）
   for (const a of (existingAssignments || [])) {
     const slotKey = a.slot_id + "_" + a.course_number;
     slotCourseCount[slotKey] = (slotCourseCount[slotKey] || 0) + 1;
@@ -122,21 +105,10 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
       const facKey = fname + "_" + a.course_number;
       facilityCourseCount[facKey] = (facilityCourseCount[facKey] || 0) + 1;
     }
-    if (s && !a.count_exempt) {
-      const sc = studentCounts[a.student_id] || (studentCounts[a.student_id] = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 });
-      sc[lotteryComboKey(s)]++;
-    }
   }
 
-  // ランダムに並べたうえで、「必須の人」を前に持ってくる（同じグループ内の順番はランダムのまま）
-  const withPriority = lotteryShuffle(prefs || []).map(p => {
-    const s = slotMap[p.slot_id];
-    const required = s ? lotteryIsRequired(studentCounts[p.student_id], lotteryComboKey(s)) : false;
-    return { p, required };
-  });
-  const ordered = withPriority
-    .filter(x => x.required).map(x => x.p)
-    .concat(withPriority.filter(x => !x.required).map(x => x.p));
+  // 完全ランダムな順番で処理する（優先ルールなし）
+  const ordered = lotteryShuffle(prefs || []);
 
   let confirmedCount = 0, lostCount = 0;
 
