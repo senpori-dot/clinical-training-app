@@ -151,6 +151,20 @@ async function renderDashboard() {
 // ============================================================
 // 詰み確認：3:3ルールを満たせる空き枠が残っていない学生の一覧
 // ============================================================
+// 6クール揃ったときに3:3ルールを満たしているか（最後の1クールの判定用）
+function isValidFinal(list) {
+  const keys = ["IN_N", "IN_G", "EX_N", "EX_G"];
+  const c = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+  let inN = 0, exN = 0;
+  list.forEach(m => {
+    if (m.institution_type === "internal") inN++; else exN++;
+    if (!m.count_exempt) c[stuckComboKey(m)]++;
+  });
+  if (inN !== 3 || exN !== 3) return false;
+  if (!keys.every(k => c[k] >= 1)) return false;
+  return [1, 2].some(a => { const t = { IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a }; return keys.every(k => c[k] <= t[k]); });
+}
+
 async function renderStuckTab() {
   const el = document.getElementById("tab-content");
   const { data: slots } = await sb.from("slots").select("*").eq("active", true);
@@ -173,6 +187,30 @@ async function renderStuckTab() {
   const byStudent = {};
   (assigns || []).forEach(a => { (byStudent[a.student_id] = byStudent[a.student_id] || []).push(a); });
 
+  // 空いているマス（枠×クール）の一覧：残り枠数つき（施設全体の上限も考慮）
+  const usedSC = {}, usedFac = {};
+  (assigns || []).forEach(a => {
+    usedSC[a.slot_id + "_" + a.course_number] = (usedSC[a.slot_id + "_" + a.course_number] || 0) + 1;
+    const s = anySlot[a.slot_id];
+    if (s) usedFac[s.facility_name + "_" + a.course_number] = (usedFac[s.facility_name + "_" + a.course_number] || 0) + 1;
+  });
+  const openCells = [];
+  for (const s of (slots || [])) {
+    if (stuckIsAbroad(s)) continue;
+    const kuro = stuckIsKuroshio(s);
+    for (let c = 1; c <= 6; c++) {
+      const cap = s["cap_" + c] || 0;
+      if (cap <= 0) continue;
+      if (kuro && !(Array.isArray(s.new_courses) && s.new_courses.map(Number).includes(c))) continue;
+      let rem = cap - (usedSC[s.id + "_" + c] || 0);
+      const l = lim[s.facility_name];
+      if (l != null) rem = Math.min(rem, l - (usedFac[s.facility_name + "_" + c] || 0));
+      if (rem <= 0) continue;
+      openCells.push({ slot: s, course: c, rem });
+    }
+  }
+
+  const riskRows = [];
   const rows = [];
   for (const st of (students || [])) {
     const mine = (byStudent[st.id] || []).map(a => {
@@ -180,7 +218,33 @@ async function renderStuckTab() {
       return { course_number: a.course_number, count_exempt: a.count_exempt, institution_type: s.institution_type, category: s.category, label: (s.facility_name || "") + " " + (s.department_name || "") };
     });
     if (mine.length >= 6) continue;
-    if (!isStudentStuck(mine, st.kuroshio_quota ? availQuota : availGeneral)) continue;
+    const availMine = st.kuroshio_quota ? availQuota : availGeneral;
+    if (!isStudentStuck(mine, availMine)) {
+      // 詰みそうな人：次に選んでも6クールを揃えられる（＝詰まない）マスが少ない人
+      const filled = new Set(mine.map(m => m.course_number));
+      const safe = [];
+      for (const cell of openCells) {
+        if (filled.has(cell.course)) continue;
+        if (!quotaAllows(cell.slot, st.kuroshio_quota || null)) continue;
+        const next = mine.concat([{ course_number: cell.course, count_exempt: false, institution_type: cell.slot.institution_type, category: cell.slot.category }]);
+        if (next.length >= 6 ? isValidFinal(next) : !isStudentStuck(next, availMine)) safe.push(cell);
+      }
+      if (safe.length <= 3) {
+        const c2 = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+        mine.forEach(m => { if (!m.count_exempt) c2[stuckComboKey(m)]++; });
+        const safeList = safe.map(x => `${window.COURSE_LABELS[x.course - 1]} ${x.slot.facility_name} ${x.slot.department_name}（残り${x.rem}）`);
+        const seatTotal = safe.reduce((t, x) => t + x.rem, 0);
+        riskRows.push({ n: safe.length, html: `<tr>
+          <td>${st.attendance_number}</td>
+          <td>${esc(st.name)}</td>
+          <td>${c2.IN_N}/${c2.IN_G}/${c2.EX_N}/${c2.EX_G}${mine.some(m => m.count_exempt) ? "<br/><span class='small-muted'>留学枠あり</span>" : ""}</td>
+          <td>${mine.length}/6</td>
+          <td><b>${safe.length}マス</b><br/><span class="small-muted">残り計${seatTotal}枠</span></td>
+          <td class="small-muted">${safeList.map(esc).join("<br/>")}</td>
+        </tr>` });
+      }
+      continue;
+    }
     const c = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
     mine.forEach(m => { if (!m.count_exempt) c[stuckComboKey(m)]++; });
     const filledSet = new Set(mine.map(m => m.course_number));
@@ -206,6 +270,17 @@ async function renderStuckTab() {
         </table>
       </div>`}
       <button class="small secondary" id="stuck-reload" style="margin-top:10px;">再計算</button>
+    </div>
+    <div class="card">
+      <b>詰みそうな人（${riskRows.length}人）</b>
+      <p class="small-muted">まだ詰んではいないが、次に選んでも6クールを揃えられる（詰まない）マスが3つ以下しか残っていない学生です。少ない順に並べています。「残り計◯枠」はそのマスの空き枠の合計で、ほかの人に取られるとさらに危なくなります。今回の希望者との取り合いは考えていません。</p>
+      ${riskRows.length === 0 ? `<p>現在、詰みそうな学生はいません。</p>` : `
+      <div style="overflow-x:auto;">
+        <table class="slots">
+          <thead><tr><th>番号</th><th>氏名</th><th>院内内/院内外/院外内/院外外</th><th>確定</th><th>安全なマス</th><th>選べば詰まないマス</th></tr></thead>
+          <tbody>${riskRows.sort((a, b) => a.n - b.n).map(r => r.html).join("")}</tbody>
+        </table>
+      </div>`}
     </div>
   `;
   document.getElementById("stuck-reload").onclick = renderStuckTab;
