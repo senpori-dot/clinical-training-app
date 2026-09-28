@@ -1037,7 +1037,9 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   }
 
   // 第4希望（2次・3次マッチング含む）：院外がまだ3つ揃っていない人は院外しか選べない
-  const forceExternal = !!(round && round.round_number === 4 && !allDone && instCounts.external < 3);
+  // 第4希望以降（2次マッチング・キャンペーン・第5・第6希望も含む）：院外がまだ3つ揃っていない人は院外しか選べない
+  const roundOrderForExt = round ? (round.display_order ?? round.round_number) : 0;
+  const forceExternal = !!(round && roundOrderForExt >= 4 && !allDone && instCounts.external < 3);
   // 院外内科が必要なのに足りていない人は院外内科しか選べない
   //  ・院内外科を2つ取っていて、院外内科が2つに満たない人
   //  ・院外内科をまだ1つも取っていない人
@@ -1052,7 +1054,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   if (forceExtNaika && canEdit) {
     statusNotice += `<div class="notice warn">あなたは<b>院外・内科系の枠しか選べません</b>（院外内科が3:3ルールの必要数に足りていないため）。それ以外の枠はタップできません。</div>`;
   } else if (forceExternal && canEdit) {
-    statusNotice += `<div class="notice warn">第4希望では、院外がまだ3つ揃っていない人は<b>院外の枠しか選べません</b>（あなたは院外 ${instCounts.external}/3）。院内の枠はタップできません。</div>`;
+    statusNotice += `<div class="notice warn">院外がまだ3つ揃っていない人は<b>院外の枠しか選べません</b>（あなたは院外 ${instCounts.external}/3）。院内の枠はタップできません。</div>`;
   }
   html += statusNotice;
 
@@ -1190,9 +1192,8 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     const { data: myAssignCounts } = await sb.from("assignments").select("student_id, slot_id, count_exempt");
     const cnt = {};
     (myAssignCounts || []).forEach(a => { cnt[a.student_id] = (cnt[a.student_id] || 0) + 1; });
-    const totalStudents = (allStudents || []).length;
-    const doneCount = (allStudents || []).filter(s => (cnt[s.id] || 0) >= 6).length;
-    let targetCount = totalStudents - doneCount; // このラウンド開始時点で参加すべきだった人数
+    // 対象者の集合（まだ6クール揃っていない人）。キャンペーンは条件で絞る
+    let targetSet = new Set((allStudents || []).filter(s => (cnt[s.id] || 0) < 6).map(s => s.id));
     if (round.eligibility === "ext_surgery_2") {
       // キャンペーン：院外外科2つ・院外3つの人だけが対象
       const slotInfo = {};
@@ -1204,11 +1205,14 @@ async function renderApp(student, round, assignments, lodgingSettings) {
         ext[a.student_id] = (ext[a.student_id] || 0) + 1;
         if (s.category === "surgery" && !a.count_exempt) exG[a.student_id] = (exG[a.student_id] || 0) + 1;
       });
-      targetCount = (allStudents || []).filter(s => (cnt[s.id] || 0) < 6 && (exG[s.id] || 0) >= 2 && (ext[s.id] || 0) >= 3 && !isCampaignExcluded(s)).length;
+      targetSet = new Set((allStudents || []).filter(s => (cnt[s.id] || 0) < 6 && (exG[s.id] || 0) >= 2 && (ext[s.id] || 0) >= 3 && !isCampaignExcluded(s)).map(s => s.id));
     }
 
-    // 2次・3次では、前の回で「確定した人」を毎回差し引く。
-    // 落選した人だけでなく、投票し忘れた人・キャンセルした人も自動的に対象人数に残る。
+    // 2次・3次では、前の回で確定した人を対象から外す。
+    // ※以前は「6クール揃った人」と「前の回で確定した人」を別々に引いていたため、
+    //   この回で6クール目が決まった人を二重に引いてしまい、対象人数が少なく表示されていた。
+    //   集合で管理して、同じ人を二重に引かないようにする。
+    //   落選した人だけでなく、投票し忘れた人・キャンセルした人も自動的に対象人数に残る。
     for (let a = 1; a < displayAttempt; a++) {
       const { data: confirmedAtA } = await sb
         .from("preferences")
@@ -1216,8 +1220,9 @@ async function renderApp(student, round, assignments, lodgingSettings) {
         .eq("round_id", round.id)
         .eq("attempt", a)
         .eq("status", "confirmed");
-      targetCount -= new Set((confirmedAtA || []).map(p => p.student_id)).size;
+      (confirmedAtA || []).forEach(p => targetSet.delete(p.student_id));
     }
+    const targetCount = targetSet.size;
 
     const attemptWord = displayAttempt === 1 ? "1次" : displayAttempt === 2 ? "2次" : "3次";
     appEl.insertAdjacentHTML("beforeend", `<div class="card"><b>${votedCount}/${targetCount}人</b><span class="small-muted"> が${attemptWord}マッチングの対象者のうち、すでに希望を提出しています。</span></div>`);
