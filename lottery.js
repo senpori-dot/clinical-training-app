@@ -83,7 +83,7 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
   // （環境によってはembed joinが失敗し、定員チェックが機能しなくなることがあったため）
   const { data: allSlots, error: slotsErr } = await sb
     .from("slots")
-    .select("id, facility_name, institution_type, category, cap_1, cap_2, cap_3, cap_4, cap_5, cap_6");
+    .select("id, facility_name, department_name, institution_type, category, active, new_courses, cap_1, cap_2, cap_3, cap_4, cap_5, cap_6");
   if (slotsErr) console.error("slots fetch error", slotsErr);
   const slotMap = {};
   (allSlots || []).forEach(s => { slotMap[s.id] = s; });
