@@ -1127,46 +1127,6 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     .from("assignments")
     .select("slot_id, course_number, lodging_choice, students(attendance_number, name)");
 
-  // ---- 「必須」の判定：その枠（そのクールのその種類）を取れないと、3:3ルールで6クールを揃えられなくなる希望 ----
-  window.__mustKeys = new Set();
-  try {
-    const pendingPrefs = (roundPrefs || []).filter(p => p.status !== "confirmed");
-    if (pendingPrefs.length > 0) {
-      const { data: assignFull } = await sb.from("assignments").select("student_id, slot_id, course_number, count_exempt");
-      const { data: slotTypes } = await sb.from("slots").select("id, institution_type, category");
-      const { data: quotaRows } = await sb.from("students").select("id, kuroshio_quota");
-      const typeOf = {};
-      (slotTypes || []).forEach(t => { typeOf[t.id] = t; });
-      const quotaOf = {};
-      (quotaRows || []).forEach(q => { quotaOf[q.id] = q.kuroshio_quota || null; });
-      const mineOf = {};
-      (assignFull || []).forEach(a => {
-        const t = typeOf[a.slot_id];
-        if (!t) return;
-        (mineOf[a.student_id] = mineOf[a.student_id] || []).push({
-          course_number: a.course_number, count_exempt: a.count_exempt,
-          institution_type: t.institution_type, category: t.category,
-        });
-      });
-      const lim = {};
-      Object.keys(limitMap).forEach(k => { lim[k] = limitMap[k].max_total; });
-      const availGeneral = buildStuckAvailability(slots || [], assignFull || [], lim, s => quotaAllows(s, null));
-      const availQuota = buildStuckAvailability(slots || [], assignFull || [], lim, s => quotaAllows(s, "県"));
-      for (const p of pendingPrefs) {
-        const t = typeOf[p.slot_id];
-        if (!t) continue;
-        const key = stuckComboKey(t);
-        const mine = mineOf[p.student_id] || [];
-        const base = quotaOf[p.student_id] ? availQuota : availGeneral;
-        if (isStudentStuck(mine, base)) continue; // すでに詰んでいる人は対象外
-        const without = JSON.parse(JSON.stringify(base));
-        without[p.course_number][key] = false; // このクールでこの種類が取れなかったとしたら
-        if (isStudentStuck(mine, without)) {
-          window.__mustKeys.add(p.student_id + "_" + p.slot_id + "_" + p.course_number);
-        }
-      }
-    }
-  } catch (e) { console.error("必須の判定に失敗しました", e); }
 
   // キャンセルによって空いた枠のお知らせ（今のラウンドで出たものだけ・まだ埋まっていないもの）
   const { data: recentCancellations } = noRound ? { data: [] } : await sb
@@ -1286,7 +1246,7 @@ function renderLegend(globalRevealed) {
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/満員(確定)/対象者限定</span>
         <span><span class="sw" style="background:#ede4f7;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">枠の縁の色は希望者数の状況（青=空きあり、オレンジ=ちょうど定員、赤=超過）を常に表示します。すでに確定人数だけで満員になった枠は、他の未確定枠と区別しやすいようグレー表示にしています。院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。「うち必須◯名」は、希望者のうち、その枠（そのクールのその種類）を取れないと3:3のルールで6クールを揃えられなくなる人の人数です（誰かは表示されません）。</p>
+      <p class="small-muted">枠の縁の色は希望者数の状況（青=空きあり、オレンジ=ちょうど定員、赤=超過）を常に表示します。すでに確定人数だけで満員になった枠は、他の未確定枠と区別しやすいようグレー表示にしています。院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。③クールの院内外科の「うち必須◯名」は、希望者のうち、③クールで院内外科を取らないと3:3のルールで6クールを揃えられなくなる人の人数です（誰かは表示されません）。</p>
     </div>
   `);
 }
@@ -1459,10 +1419,14 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   // 匿名ルール：
   // ・宿泊が絡む施設 → 最初から全員に氏名を表示（部屋割り調整のため）。
   // ・宿泊が絡まない施設 → 抽選確定(confirmed)するまでは氏名を出さない（自分自身の分を除く）。
-  // 希望者のうち「必須」（ここで取れないと6クールを揃えられなくなる人）の人数。誰が必須かは表示しない
-  const mustCount = pendingHere.filter(p =>
-    window.__mustKeys && window.__mustKeys.has(p.student_id + "_" + p.slot_id + "_" + courseNumber)
-  ).length;
+  // ③クールの院内外科だけ、希望者のうち「必須」の人数を表示する（誰が必須かは表示しない）
+  // 必須＝③クールで院内外科を取らないと6クールを揃えられない人：
+  //   岩崎さん(7)・大塚さん(13)・髙木さん(40)・馬場谷さん(61)・檜皮谷さん(67)・吉田泰規さん(98)
+  const MUST_IN_G_COURSE3 = [7, 13, 40, 61, 67, 98];
+  const isC3InternalSurgery = courseNumber === 3 && slot.institution_type === "internal" && slot.category === "surgery";
+  const mustCount = isC3InternalSurgery
+    ? pendingHere.filter(p => p.students && MUST_IN_G_COURSE3.includes(Number(p.students.attendance_number))).length
+    : 0;
   const mustLine = mustCount > 0
     ? `<span style="color:#b3413a;font-weight:700;">うち必須 ${mustCount}名</span>`
     : "";
