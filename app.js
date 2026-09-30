@@ -1045,7 +1045,8 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   //  ・院外内科をまだ1つも取っていない人
   // 第4希望以降（キャンペーン・第5・第6希望も含む）で適用。院外内科が必要数に達したら自動で外れる
   const roundOrder = round ? (round.display_order ?? round.round_number) : 0;
-  const forceExtNaika = !!(round && roundOrder >= 4 && !allDone
+  // ※第5希望以降は「院外内科しか選べない」制限はかけない（院外縛りのみ）。第4希望（1次・2次）だけの制限
+  const forceExtNaika = !!(round && round.round_number === 4 && !allDone
     && ((counts.IN_G === 2 && counts.EX_N < 2) || counts.EX_N === 0));
   window.__forceExternal = forceExternal;
   window.__forceExtNaika = forceExtNaika;
