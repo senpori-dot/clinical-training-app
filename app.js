@@ -751,8 +751,22 @@ function attachLodgingHandlers() {
   });
 }
 
+// 個別の例外：あとで確定済みの枠を差し替える予定がある人は、差し替え後の内容で3:3ルールを判定する
+//  小山さん(34)：⑤クール（有田）をキャンセルして和歌山労災の整形外科（院外・外科系）に行く予定
+const PLANNED_SWAPS = [
+  { number: 34, surname: "小山", course: 5, institution_type: "external", category: "surgery" },
+];
+function applyPlannedSwap(student, assignments) {
+  const sw = PLANNED_SWAPS.find(x =>
+    Number(student.attendance_number) === x.number && (student.name || "").replace(/[\s\u3000]/g, "").startsWith(x.surname));
+  if (!sw) return assignments;
+  return assignments.map(a => a.course_number === sw.course
+    ? Object.assign({}, a, { count_exempt: false, slots: Object.assign({}, a.slots, { institution_type: sw.institution_type, category: sw.category }) })
+    : a);
+}
+
 async function renderApp(student, round, assignments, lodgingSettings) {
-  const { counts, instCounts, catCounts, filledCourses } = computeState(assignments);
+  const { counts, instCounts, catCounts, filledCourses } = computeState(applyPlannedSwap(student, assignments));
   const allDone = filledCourses.size >= 6;
   const feasible = feasiblePatterns(counts);
   const now = new Date();
@@ -1211,7 +1225,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     const lim = {};
     Object.keys(limitMap).forEach(k => { lim[k] = limitMap[k].max_total; });
     const avail = buildStuckAvailability(slots || [], allAssignments || [], lim, s => quotaAllows(s, window.__myQuota));
-    const mine = assignments.map(a => ({
+    const mine = applyPlannedSwap(student, assignments).map(a => ({
       course_number: a.course_number, count_exempt: a.count_exempt,
       institution_type: a.slots.institution_type, category: a.slots.category,
     }));
