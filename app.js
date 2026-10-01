@@ -1102,7 +1102,8 @@ async function renderApp(student, round, assignments, lodgingSettings) {
       && !/^(佐伯|谷口)/.test((student.name || "").trim())) {
     maybeShowCampaignInvitePopup(student, round, attempt);
   }
-  if (canEdit && !allDone && !forceExtNaika) {
+  // 院外縛りの人には、院外縛りのポップアップだけを出す（院外内科のお願いは出さない）
+  if (canEdit && !allDone && !forceExtNaika && !forceExternal) {
     maybeShowExnPopup(student, round, attempt, counts, assignments.some(a => a.count_exempt));
   }
   if (countdownTarget) {
