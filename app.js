@@ -905,6 +905,39 @@ async function renderApp(student, round, assignments, lodgingSettings) {
         : basePhase === "first_choice" ? 1
         : (round.third_deadline ? 3 : (round.second_deadline ? 2 : 1));
       attempt = displayAttempt;
+
+      // 全クール確定済みの人でも、このラウンドの1次マッチングで確定した枠はキャンセル受付期間中ならキャンセルできる
+      if (round.cancel_window_start && round.cancel_window_end) {
+        const { data: myFirst } = await sb
+          .from("preferences")
+          .select("*, slots(facility_name, department_name)")
+          .eq("student_id", student.id)
+          .eq("round_id", round.id)
+          .eq("attempt", 1)
+          .eq("status", "confirmed")
+          .maybeSingle();
+        if (myFirst && !myFirst.cancelled) {
+          const cwStart = new Date(round.cancel_window_start).getTime();
+          const cwEnd = new Date(round.cancel_window_end).getTime();
+          const label = `${window.COURSE_LABELS[myFirst.course_number - 1]}「${esc(myFirst.slots.facility_name)} ${esc(myFirst.slots.department_name)}」`;
+          if (Date.now() >= cwStart && Date.now() <= cwEnd) {
+            statusNotice += `<div class="card" style="border:2px solid #b3413a;">
+              <b style="color:#b3413a;">${label} をキャンセルできます</b>
+              <div class="countdown-box" style="background:#fbdede;color:#b3413a;"><span>キャンセル受付終了まで</span> <span id="cancel-countdown-timer">--:--:--</span></div>
+              <p class="small-muted" style="margin-top:8px;">このラウンドの1次マッチングで確定した枠です。キャンセルすると、この確定は取り消され、2次マッチングで空いている枠から改めて選び直せます。キャンセルできるのは1ラウンドにつき1回だけで、<b>押すと取り消しはできません。</b></p>
+              <button class="secondary" id="cancel-confirmed-btn" data-pref-id="${myFirst.id}" data-course="${myFirst.course_number}">この枠をキャンセルする（取り消し不可）</button>
+            </div>`;
+            cancelCountdownTarget = round.cancel_window_end;
+          } else if (Date.now() < cwStart) {
+            statusNotice += `<div class="card">
+              <b class="panel-heading">${label} のキャンセル受付開始までのカウントダウン</b>
+              <div class="countdown-box"><span>キャンセル受付開始まで</span> <span id="cancel-countdown-timer">--:--:--</span></div>
+              <div class="small-muted" style="margin-top:6px;">キャンセル受付は ${fmtDate(round.cancel_window_start)} から ${fmtDate(round.cancel_window_end)} までです。</div>
+            </div>`;
+            cancelCountdownTarget = round.cancel_window_start;
+          }
+        }
+      }
     }
   } else if (notStarted) {
     if (!noRound) statusNotice = `<div class="notice info">このラウンドはまだ開始していません。開始をお待ちください（下の表は閲覧のみ、選択はまだできません）。</div>`;
