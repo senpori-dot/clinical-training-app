@@ -1750,6 +1750,31 @@ async function executeSwap(req, studentsById) {
   return null;
 }
 
+// 成立したトレードを元に戻す（交換前の枠に入れ替え直す）。OKなら null、ダメなら理由
+async function revertSwap(w) {
+  if (!Array.isArray(w.detail) || w.detail.length === 0) {
+    return "このトレードには交換前の記録がないため、自動では元に戻せません。学年代表に連絡してください。";
+  }
+  const { data: cur } = await sb.from("assignments")
+    .select("id, student_id, course_number, slot_id")
+    .in("student_id", [w.from_student, w.to_student]);
+  const find = (sid, c) => (cur || []).find(x => String(x.student_id) === String(sid) && x.course_number === Number(c));
+  for (const d of w.detail) {
+    const a = find(w.from_student, d.course), b = find(w.to_student, d.course);
+    if (!a || !b || a.slot_id !== d.to_slot || b.slot_id !== d.from_slot) {
+      return `${window.COURSE_LABELS[d.course - 1]}の枠が交換後に変わっているため、自動では元に戻せません。学年代表に連絡してください。`;
+    }
+  }
+  for (const d of w.detail) {
+    const a = find(w.from_student, d.course), b = find(w.to_student, d.course);
+    const r1 = await sb.from("assignments").update({ slot_id: d.from_slot, lodging_choice: null, swapped: false }).eq("id", a.id);
+    const r2 = await sb.from("assignments").update({ slot_id: d.to_slot, lodging_choice: null, swapped: false }).eq("id", b.id);
+    if (r1.error || r2.error) return "書き込みに失敗しました: " + (r1.error || r2.error).message;
+  }
+  await sb.from("swap_requests").update({ status: "reverted" }).eq("id", w.id);
+  return null;
+}
+
 async function renderSwapSection(student, myAssignsRaw) {
   const { data: ts } = await sb.from("trade_settings").select("*").eq("id", 1).maybeSingle();
   if (!ts || !ts.enabled) return;
@@ -1768,6 +1793,9 @@ async function renderSwapSection(student, myAssignsRaw) {
   const incoming = (reqs || []).filter(r => r.to_student === myId);
   const outgoing = (reqs || []).filter(r => r.from_student === myId);
   const nameOf = id => studentsById[id] ? `${studentsById[id].attendance_number} ${studentsById[id].name}` : "（不明）";
+  // 自分が関わる、成立済みのトレード（2人とも「元に戻す」を押すと元に戻る）
+  const { data: doneSwaps } = await sb.from("swap_requests").select("*").eq("status", "done")
+    .or(`from_student.eq.${myId},to_student.eq.${myId}`);
   const courseList = cs => (cs || []).map(c => window.COURSE_LABELS[Number(c) - 1]).join("・");
 
   let incomingHtml = "";
@@ -1792,6 +1820,27 @@ async function renderSwapSection(student, myAssignsRaw) {
       <button class="small secondary" data-swap-withdraw="${r.id}">取り下げ</button>
     </div>`).join("");
 
+  const revertHtml = (doneSwaps || []).map(w => {
+    const iAmFrom = w.from_student === myId;
+    const partner = iAmFrom ? w.to_student : w.from_student;
+    const mine = iAmFrom ? w.revert_from : w.revert_to;
+    const theirs = iAmFrom ? w.revert_to : w.revert_from;
+    let stateHtml, btnHtml;
+    if (mine && !theirs) {
+      stateHtml = `<span class="small-muted">あなたは「元に戻す」を押しました。相手の同意待ちです。</span>`;
+      btnHtml = `<button class="small secondary" data-swap-unrevert="${w.id}">取り消す</button>`;
+    } else if (!mine && theirs) {
+      stateHtml = `<span style="color:#b3413a;font-weight:700;">相手から「元に戻したい」と依頼が来ています。</span>`;
+      btnHtml = `<button class="small" data-swap-revert="${w.id}">同意して元に戻す</button>`;
+    } else {
+      stateHtml = "";
+      btnHtml = `<button class="small secondary" data-swap-revert="${w.id}">元に戻す（相手の同意が必要）</button>`;
+    }
+    return `<div style="margin:6px 0;padding:8px;border:1px solid #d9c7ef;border-radius:8px;">
+      ✅ ${esc(nameOf(partner))} さんとのトレード（${courseList(w.courses)}）が成立済み<br/>${stateHtml}<div style="margin-top:4px;">${btnHtml}</div>
+    </div>`;
+  }).join("");
+
   const options = (studs || []).filter(s => String(s.id) !== myId)
     .map(s => `<option value="${s.id}">${s.attendance_number} ${esc(s.name)}</option>`).join("");
 
@@ -1801,6 +1850,7 @@ async function renderSwapSection(student, myAssignsRaw) {
       <p class="small-muted">交換したい相手を選び、交換するクールにチェックを入れて申請してください。相手が承認すると交換が成立します。同じクール番号どうしで入れ替わり、交換後に2人とも3:3のルールを満たしている場合だけ申請できます（2クールまとめての交換もOK）。交換した枠は表の中で紫色の🔄付きで表示されます。黒潮プロジェクトの枠と留学の枠は交換できません。宿泊の回答は交換後にやり直しになります。</p>
       ${incomingHtml}
       ${outgoingHtml ? `<div style="margin:8px 0;"><b class="panel-heading">あなたが申請中のトレード</b>${outgoingHtml}</div>` : ""}
+      ${revertHtml ? `<div style="margin:8px 0;"><b class="panel-heading">成立したトレード（2人とも「元に戻す」を押すと元に戻ります）</b>${revertHtml}</div>` : ""}
       <div style="margin-top:10px;">
         <label class="small-muted">交換したい相手</label>
         <select id="swap-partner"><option value="">選んでください</option>${options}</select>
@@ -1818,6 +1868,38 @@ async function renderSwapSection(student, myAssignsRaw) {
       const err = await executeSwap(r, studentsById);
       if (err) { alert(err); btn.disabled = false; return; }
       alert("交換が成立しました！");
+      location.reload();
+    };
+  });
+  document.querySelectorAll("[data-swap-revert]").forEach(btn => {
+    btn.onclick = async () => {
+      const w = (doneSwaps || []).find(x => x.id === btn.dataset.swapRevert);
+      if (!w) return;
+      const iAmFrom = w.from_student === myId;
+      const theirs = iAmFrom ? w.revert_to : w.revert_from;
+      if (!confirm(theirs
+        ? "相手も同意しているので、このトレードを元に戻します。よろしいですか？"
+        : "このトレードを元に戻したいと相手に伝えます。相手も「元に戻す」を押すと元に戻ります。よろしいですか？")) return;
+      btn.disabled = true;
+      const field = iAmFrom ? "revert_from" : "revert_to";
+      const { error } = await sb.from("swap_requests").update({ [field]: true }).eq("id", w.id);
+      if (error) { alert("失敗しました: " + error.message); btn.disabled = false; return; }
+      if (theirs) {
+        const err = await revertSwap(w);
+        if (err) { alert(err); btn.disabled = false; return; }
+        alert("トレードを元に戻しました。");
+      } else {
+        alert("相手の同意待ちです。相手も「元に戻す」を押すと元に戻ります。");
+      }
+      location.reload();
+    };
+  });
+  document.querySelectorAll("[data-swap-unrevert]").forEach(btn => {
+    btn.onclick = async () => {
+      const w = (doneSwaps || []).find(x => x.id === btn.dataset.swapUnrevert);
+      if (!w) return;
+      const field = w.from_student === myId ? "revert_from" : "revert_to";
+      await sb.from("swap_requests").update({ [field]: false }).eq("id", w.id);
       location.reload();
     };
   });
