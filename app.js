@@ -1731,13 +1731,15 @@ async function executeSwap(req, studentsById) {
   const qb = studentsById[bId] ? studentsById[bId].kuroshio_quota : null;
   const err = validateSwap(A, B, courses, qa || null, qb || null);
   if (err) return "交換できませんでした：" + err;
+  const detail = []; // 元に戻すときのために、交換前の枠を記録しておく
   for (const c of courses) {
     const a = A.find(x => x.course_number === c), b = B.find(x => x.course_number === c);
     const r1 = await sb.from("assignments").update({ slot_id: b.slot_id, lodging_choice: null, swapped: true }).eq("id", a.id);
     const r2 = await sb.from("assignments").update({ slot_id: a.slot_id, lodging_choice: null, swapped: true }).eq("id", b.id);
     if (r1.error || r2.error) return "交換の書き込みに失敗しました。学年代表に連絡してください。" + ((r1.error || r2.error).message || "");
+    detail.push({ course: c, from_slot: a.slot_id, to_slot: b.slot_id });
   }
-  await sb.from("swap_requests").update({ status: "done", done_at: new Date().toISOString() }).eq("id", req.id);
+  await sb.from("swap_requests").update({ status: "done", done_at: new Date().toISOString(), detail }).eq("id", req.id);
   // 同じ2人が関わる、ほかの申請中のトレードは古くなるので無効にする
   const { data: others } = await sb.from("swap_requests").select("id, from_student, to_student").eq("status", "pending");
   for (const o of (others || [])) {

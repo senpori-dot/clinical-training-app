@@ -302,13 +302,14 @@ async function renderTradeTab() {
   const { data: studsAll } = await sb.from("students").select("id, attendance_number, name");
   const sName = {};
   (studsAll || []).forEach(x => { sName[String(x.id)] = `${x.attendance_number} ${x.name}`; });
-  const swapStatus = { pending: "申請中", done: "✅ 成立", declined: "断られた", withdrawn: "取り下げ", stale: "無効（別の交換が成立）" };
+  const swapStatus = { pending: "申請中", done: "✅ 成立", declined: "断られた", withdrawn: "取り下げ", stale: "無効（別の交換が成立）", reverted: "↩️ 元に戻した" };
   const swapRows = (swaps || []).map(w => `
     <tr>
       <td>${esc(sName[w.from_student] || "?")}</td>
       <td>${esc(sName[w.to_student] || "?")}</td>
       <td>${(w.courses || []).map(c => window.COURSE_LABELS[Number(c) - 1]).join("・")}</td>
-      <td>${swapStatus[w.status] || w.status}</td>
+      <td>${swapStatus[w.status] || w.status}
+        ${w.status === "done" ? `<br/><button class="small secondary" data-swap-revert="${w.id}" style="margin-top:4px;">元に戻す</button>` : ""}</td>
       <td class="small-muted">${w.done_at ? new Date(w.done_at).toLocaleString("ja-JP") : new Date(w.created_at).toLocaleString("ja-JP")}</td>
     </tr>`).join("");
 
@@ -357,6 +358,42 @@ async function renderTradeTab() {
       </table>
     </div>
   `;
+
+  // 成立したトレードを元に戻す（交換前の枠に入れ替え直す）
+  document.querySelectorAll("[data-swap-revert]").forEach(btn => {
+    btn.onclick = async () => {
+      const w = (swaps || []).find(x => x.id === btn.dataset.swapRevert);
+      if (!w) return;
+      if (!Array.isArray(w.detail) || w.detail.length === 0) {
+        alert("このトレードには交換前の記録がないため、自動では元に戻せません（記録機能を入れる前に成立したトレードです）。");
+        return;
+      }
+      if (!confirm(`${sName[w.from_student]} さんと ${sName[w.to_student]} さんのトレードを元に戻します。よろしいですか？`)) return;
+      btn.disabled = true;
+      // 2人の今の枠が「交換した直後のまま」かを確認してから戻す
+      const { data: cur } = await sb.from("assignments")
+        .select("id, student_id, course_number, slot_id")
+        .in("student_id", [w.from_student, w.to_student]);
+      const find = (sid, c) => (cur || []).find(x => String(x.student_id) === String(sid) && x.course_number === Number(c));
+      for (const d of w.detail) {
+        const a = find(w.from_student, d.course), b = find(w.to_student, d.course);
+        if (!a || !b || a.slot_id !== d.to_slot || b.slot_id !== d.from_slot) {
+          alert(`${window.COURSE_LABELS[d.course - 1]}の枠が交換後に変わっているため、自動では元に戻せません。個別に確認してください。`);
+          btn.disabled = false;
+          return;
+        }
+      }
+      for (const d of w.detail) {
+        const a = find(w.from_student, d.course), b = find(w.to_student, d.course);
+        const r1 = await sb.from("assignments").update({ slot_id: d.from_slot, lodging_choice: null, swapped: false }).eq("id", a.id);
+        const r2 = await sb.from("assignments").update({ slot_id: d.to_slot, lodging_choice: null, swapped: false }).eq("id", b.id);
+        if (r1.error || r2.error) { alert("書き込みに失敗しました: " + (r1.error || r2.error).message); btn.disabled = false; return; }
+      }
+      await sb.from("swap_requests").update({ status: "reverted" }).eq("id", w.id);
+      alert("元に戻しました。");
+      renderTradeTab();
+    };
+  });
 
   document.getElementById("save-trade-settings").onclick = async () => {
     const enabled = document.getElementById("trade-enabled").checked;
