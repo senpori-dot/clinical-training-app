@@ -297,6 +297,21 @@ async function renderTradeTab() {
     .select("*, students:student_id(attendance_number, name), slots(facility_name, department_name)")
     .order("created_at", { ascending: false });
 
+  // 友達同士のトレード（交換）の申請・成立の履歴
+  const { data: swaps } = await sb.from("swap_requests").select("*").order("created_at", { ascending: false });
+  const { data: studsAll } = await sb.from("students").select("id, attendance_number, name");
+  const sName = {};
+  (studsAll || []).forEach(x => { sName[String(x.id)] = `${x.attendance_number} ${x.name}`; });
+  const swapStatus = { pending: "申請中", done: "✅ 成立", declined: "断られた", withdrawn: "取り下げ", stale: "無効（別の交換が成立）" };
+  const swapRows = (swaps || []).map(w => `
+    <tr>
+      <td>${esc(sName[w.from_student] || "?")}</td>
+      <td>${esc(sName[w.to_student] || "?")}</td>
+      <td>${(w.courses || []).map(c => window.COURSE_LABELS[Number(c) - 1]).join("・")}</td>
+      <td>${swapStatus[w.status] || w.status}</td>
+      <td class="small-muted">${w.done_at ? new Date(w.done_at).toLocaleString("ja-JP") : new Date(w.created_at).toLocaleString("ja-JP")}</td>
+    </tr>`).join("");
+
   const statusLabel = { open: "出品中", matched: "成立", cancelled: "取り下げ" };
   const rows = (offers || []).map(o => `
     <tr>
@@ -310,7 +325,7 @@ async function renderTradeTab() {
   document.getElementById("tab-content").innerHTML = `
     <div class="card">
       <b>トレード期間の設定</b>
-      <p class="small-muted">全クールの確定後に、学生同士が同じクール番号の枠を交換できる機能です（trade.html）。院内3・院外3・内科3・外科3、4組み合わせのルールを崩す交換・移動は自動的にブロックされます。</p>
+      <p class="small-muted">オンにすると、学生ページに「友達とトレード（交換）」の欄が表示されます。学生同士が同じクール番号の枠を交換でき（複数クールまとめてもOK）、相手が承認すると成立します。交換後に2人とも3:3ルールを満たす場合だけ申請できます。黒潮プロジェクト・留学の枠は交換不可です。</p>
       <div style="margin:10px 0;">
         <label><input type="checkbox" id="trade-enabled" ${settings && settings.enabled ? "checked" : ""} /> トレードを有効にする</label>
       </div>
@@ -324,6 +339,15 @@ async function renderTradeTab() {
       </div>
       <button id="save-trade-settings">保存</button>
       <div id="trade-save-result" class="small-muted" style="margin-top:8px;"></div>
+    </div>
+    <div class="card">
+      <b>友達同士のトレード（新しい順）</b>
+      <div style="overflow-x:auto;">
+        <table class="slots" style="margin-top:10px;">
+          <thead><tr><th>申請した人</th><th>相手</th><th>クール</th><th>状態</th><th>日時</th></tr></thead>
+          <tbody>${swapRows || '<tr><td colspan="5" class="small-muted">まだ申請はありません</td></tr>'}</tbody>
+        </table>
+      </div>
     </div>
     <div class="card">
       <b>出品状況（新しい順）</b>

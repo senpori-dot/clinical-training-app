@@ -1124,6 +1124,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   appEl.innerHTML = html;
   attachLodgingHandlers();
   attachCancelHandler(student);
+  try { await renderSwapSection(student, assignments); } catch (e) { console.error("トレード欄の表示に失敗しました", e); }
   if (allDone) {
     maybeShowResultReveal("all-done-" + student.id, "alldone", "6クールすべての実習先が決まりました。お疲れ様でした！");
   }
@@ -1174,7 +1175,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
 
   const { data: allAssignments } = await sb
     .from("assignments")
-    .select("slot_id, course_number, lodging_choice, students(attendance_number, name)");
+    .select("*, students(attendance_number, name)");
 
 
   // キャンセルによって空いた枠のお知らせ（今のラウンドで出たものだけ・まだ埋まっていないもの）
@@ -1459,10 +1460,13 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     return ` <span class="lodge-tag lodge-unanswered">(未回答)</span>`;
   }
 
+  // トレード（交換）で入れ替わった枠は紫色＋🔄で表示する
+  const swapMark = a => a.swapped ? `<span style="color:#7b3fb3;font-weight:800;">🔄</span>` : "";
+  const swapStyle = a => a.swapped ? ` style="color:#7b3fb3;"` : "";
   const confirmedNamesHtml = confirmedHere.map(a =>
     a.students.attendance_number === student.attendance_number
-      ? `<span class="me-confirmed">✔ ${esc(a.students.name)}(あなた)</span>${lodgingTag(a)}`
-      : `<b class="${lodging ? (a.lodging_choice === 'yes' ? 'name-lodging-yes' : a.lodging_choice === 'no' ? 'name-lodging-no' : 'name-lodging-unanswered') : ''}">${esc(a.students.name)}</b>${lodgingTag(a)}`
+      ? `<span class="me-confirmed"${swapStyle(a)}>✔ ${swapMark(a)}${esc(a.students.name)}(あなた)</span>${lodgingTag(a)}`
+      : `<b class="${lodging ? (a.lodging_choice === 'yes' ? 'name-lodging-yes' : a.lodging_choice === 'no' ? 'name-lodging-no' : 'name-lodging-unanswered') : ''}"${swapStyle(a)}>${swapMark(a)}${esc(a.students.name)}</b>${lodgingTag(a)}`
   ).join("<br>");
 
   // 匿名ルール：
@@ -1651,3 +1655,236 @@ async function onCellClick(td, student, round, attempt, myPref) {
 }
 
 main();
+
+
+// ============================================================
+// 友達同士のトレード（交換）
+// ・同じクール番号どうしの枠を入れ替える（1クールだけでも、複数クールまとめてでもOK）
+// ・入れ替えた後に、2人とも3:3ルール（院内3・院外3・内科3・外科3、4つの組み合わせ）を満たしていればOK
+// ・申請 → 相手が承認（＝相手も同じ内容で申請）した時点で交換成立
+// ・黒潮プロジェクトの枠・留学（カウント対象外）の枠は交換できない
+// ・管理画面の「トレード」で「トレードを有効にする」がオンで、期間内のときだけ表示する
+// ============================================================
+function swapComboKey(slot) {
+  return (slot.institution_type === "internal" ? "IN" : "EX") + "_" + (slot.category === "internal_medicine" ? "N" : "G");
+}
+// 枠のリストが3:3ルールに合っているか（6クール揃っていれば最終形、未完成なら「まだ成立しうるか」）
+function swapRuleOk(list) {
+  const keys = ["IN_N", "IN_G", "EX_N", "EX_G"];
+  const c = { IN_N: 0, IN_G: 0, EX_N: 0, EX_G: 0 };
+  let inN = 0, exN = 0;
+  list.forEach(a => {
+    if (a.slots.institution_type === "internal") inN++; else exN++;
+    if (!a.count_exempt) c[swapComboKey(a.slots)]++;
+  });
+  if (inN > 3 || exN > 3) return false;
+  const fits = [1, 2].some(x => { const t = { IN_N: x, IN_G: 3 - x, EX_N: 3 - x, EX_G: x }; return keys.every(k => c[k] <= t[k]); });
+  if (!fits) return false;
+  if (list.length >= 6) return inN === 3 && exN === 3 && keys.every(k => c[k] >= 1);
+  return true;
+}
+function swapBlockedReason(a) {
+  if (!a) return "枠がありません";
+  if (a.count_exempt) return "留学（カウント対象外）の枠は交換できません";
+  const dep = (a.slots.department_name || "") + (a.slots.facility_name || "");
+  if (dep.includes("黒潮医療人養成プロジェクト")) return "黒潮プロジェクトの枠は交換できません";
+  return null;
+}
+// 交換してよいかの判定。OKなら null、ダメなら理由の文字列
+function validateSwap(mine, theirs, courses, myQuota, theirQuota) {
+  if (!courses || courses.length === 0) return "交換するクールを選んでください。";
+  for (const c of courses) {
+    const a = mine.find(x => x.course_number === c), b = theirs.find(x => x.course_number === c);
+    if (!a || !b) return `${window.COURSE_LABELS[c - 1]}はどちらかがまだ確定していないので交換できません。`;
+    const r1 = swapBlockedReason(a), r2 = swapBlockedReason(b);
+    if (r1) return `${window.COURSE_LABELS[c - 1]}：${r1}`;
+    if (r2) return `${window.COURSE_LABELS[c - 1]}：${r2}`;
+    if (a.slot_id === b.slot_id) return `${window.COURSE_LABELS[c - 1]}は同じ枠なので交換の意味がありません。`;
+    if (!quotaAllows(b.slots, myQuota)) return `${window.COURSE_LABELS[c - 1]}：相手の枠はあなたが選べない枠（一般枠／地・県枠）です。`;
+    if (!quotaAllows(a.slots, theirQuota)) return `${window.COURSE_LABELS[c - 1]}：あなたの枠は相手が選べない枠（一般枠／地・県枠）です。`;
+  }
+  const newMine = mine.map(a => courses.includes(a.course_number) ? Object.assign({}, a, { slots: theirs.find(x => x.course_number === a.course_number).slots }) : a);
+  const newTheirs = theirs.map(b => courses.includes(b.course_number) ? Object.assign({}, b, { slots: mine.find(x => x.course_number === b.course_number).slots }) : b);
+  if (!swapRuleOk(newMine)) return "この交換をすると、あなたの3:3ルールが崩れてしまいます。";
+  if (!swapRuleOk(newTheirs)) return "この交換をすると、相手の3:3ルールが崩れてしまいます。";
+  return null;
+}
+async function loadSwapAssigns(studentId) {
+  const { data } = await sb.from("assignments")
+    .select("id, course_number, slot_id, count_exempt, slots(facility_name, department_name, institution_type, category)")
+    .eq("student_id", studentId);
+  return data || [];
+}
+function swapSlotLabel(a) {
+  if (!a) return "（未確定）";
+  const k = swapComboKey(a.slots);
+  const kl = { IN_N: "院内内", IN_G: "院内外", EX_N: "院外内", EX_G: "院外外" }[k];
+  return `[${kl}] ${a.slots.facility_name} ${a.slots.department_name}`;
+}
+
+// 交換を実行する（承認した側のブラウザで実行）
+async function executeSwap(req, studentsById) {
+  const aId = req.from_student, bId = req.to_student;
+  const courses = (req.courses || []).map(Number);
+  const [A, B] = await Promise.all([loadSwapAssigns(aId), loadSwapAssigns(bId)]);
+  const qa = studentsById[aId] ? studentsById[aId].kuroshio_quota : null;
+  const qb = studentsById[bId] ? studentsById[bId].kuroshio_quota : null;
+  const err = validateSwap(A, B, courses, qa || null, qb || null);
+  if (err) return "交換できませんでした：" + err;
+  for (const c of courses) {
+    const a = A.find(x => x.course_number === c), b = B.find(x => x.course_number === c);
+    const r1 = await sb.from("assignments").update({ slot_id: b.slot_id, lodging_choice: null, swapped: true }).eq("id", a.id);
+    const r2 = await sb.from("assignments").update({ slot_id: a.slot_id, lodging_choice: null, swapped: true }).eq("id", b.id);
+    if (r1.error || r2.error) return "交換の書き込みに失敗しました。学年代表に連絡してください。" + ((r1.error || r2.error).message || "");
+  }
+  await sb.from("swap_requests").update({ status: "done", done_at: new Date().toISOString() }).eq("id", req.id);
+  // 同じ2人が関わる、ほかの申請中のトレードは古くなるので無効にする
+  const { data: others } = await sb.from("swap_requests").select("id, from_student, to_student").eq("status", "pending");
+  for (const o of (others || [])) {
+    if ([o.from_student, o.to_student].some(x => x === aId || x === bId)) {
+      await sb.from("swap_requests").update({ status: "stale" }).eq("id", o.id);
+    }
+  }
+  return null;
+}
+
+async function renderSwapSection(student, myAssignsRaw) {
+  const { data: ts } = await sb.from("trade_settings").select("*").eq("id", 1).maybeSingle();
+  if (!ts || !ts.enabled) return;
+  const now = Date.now();
+  if (ts.start_at && now < new Date(ts.start_at).getTime()) return;
+  if (ts.end_at && now > new Date(ts.end_at).getTime()) return;
+
+  const myId = String(student.id);
+  const { data: studs } = await sb.from("students").select("id, attendance_number, name, kuroshio_quota").order("attendance_number");
+  const studentsById = {};
+  (studs || []).forEach(s => { studentsById[String(s.id)] = s; });
+  const myQuota = student.kuroshio_quota || null;
+  const mine = await loadSwapAssigns(student.id);
+
+  const { data: reqs } = await sb.from("swap_requests").select("*").eq("status", "pending");
+  const incoming = (reqs || []).filter(r => r.to_student === myId);
+  const outgoing = (reqs || []).filter(r => r.from_student === myId);
+  const nameOf = id => studentsById[id] ? `${studentsById[id].attendance_number} ${studentsById[id].name}` : "（不明）";
+  const courseList = cs => (cs || []).map(c => window.COURSE_LABELS[Number(c) - 1]).join("・");
+
+  let incomingHtml = "";
+  for (const r of incoming) {
+    const theirs = await loadSwapAssigns(r.from_student);
+    const rows = (r.courses || []).map(Number).map(c => `
+      <tr><td>${window.COURSE_LABELS[c - 1]}</td>
+        <td>${esc(swapSlotLabel(mine.find(x => x.course_number === c)))}</td>
+        <td>→</td>
+        <td><b>${esc(swapSlotLabel(theirs.find(x => x.course_number === c)))}</b></td></tr>`).join("");
+    incomingHtml += `<div class="card" style="border:2px solid #7b3fb3;">
+      <b>${esc(nameOf(r.from_student))} さんから交換の申請が来ています</b>
+      <table class="slots" style="margin-top:8px;"><thead><tr><th>クール</th><th>あなたの枠（渡す）</th><th></th><th>もらう枠</th></tr></thead><tbody>${rows}</tbody></table>
+      <div style="margin-top:8px;">
+        <button class="small" data-swap-accept="${r.id}">承認して交換する</button>
+        <button class="small secondary" data-swap-decline="${r.id}">断る</button>
+      </div>
+    </div>`;
+  }
+  const outgoingHtml = outgoing.map(r => `<div class="small-muted" style="margin:4px 0;">
+      ${esc(nameOf(r.to_student))} さんへ申請中（${courseList(r.courses)}）
+      <button class="small secondary" data-swap-withdraw="${r.id}">取り下げ</button>
+    </div>`).join("");
+
+  const options = (studs || []).filter(s => String(s.id) !== myId)
+    .map(s => `<option value="${s.id}">${s.attendance_number} ${esc(s.name)}</option>`).join("");
+
+  appEl.insertAdjacentHTML("beforeend", `
+    <div class="card" id="swap-card">
+      <b style="color:#7b3fb3;">🔄 友達とトレード（交換）</b>
+      <p class="small-muted">交換したい相手を選び、交換するクールにチェックを入れて申請してください。相手が承認すると交換が成立します。同じクール番号どうしで入れ替わり、交換後に2人とも3:3のルールを満たしている場合だけ申請できます（2クールまとめての交換もOK）。交換した枠は表の中で紫色の🔄付きで表示されます。黒潮プロジェクトの枠と留学の枠は交換できません。宿泊の回答は交換後にやり直しになります。</p>
+      ${incomingHtml}
+      ${outgoingHtml ? `<div style="margin:8px 0;"><b class="panel-heading">あなたが申請中のトレード</b>${outgoingHtml}</div>` : ""}
+      <div style="margin-top:10px;">
+        <label class="small-muted">交換したい相手</label>
+        <select id="swap-partner"><option value="">選んでください</option>${options}</select>
+      </div>
+      <div id="swap-detail" style="margin-top:10px;"></div>
+    </div>
+  `);
+
+  document.querySelectorAll("[data-swap-accept]").forEach(btn => {
+    btn.onclick = async () => {
+      const r = incoming.find(x => x.id === btn.dataset.swapAccept);
+      if (!r) return;
+      if (!confirm("この内容で交換します。成立すると元に戻せません。よろしいですか？")) return;
+      btn.disabled = true;
+      const err = await executeSwap(r, studentsById);
+      if (err) { alert(err); btn.disabled = false; return; }
+      alert("交換が成立しました！");
+      location.reload();
+    };
+  });
+  document.querySelectorAll("[data-swap-decline]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm("この申請を断りますか？")) return;
+      await sb.from("swap_requests").update({ status: "declined" }).eq("id", btn.dataset.swapDecline);
+      location.reload();
+    };
+  });
+  document.querySelectorAll("[data-swap-withdraw]").forEach(btn => {
+    btn.onclick = async () => {
+      if (!confirm("この申請を取り下げますか？")) return;
+      await sb.from("swap_requests").update({ status: "withdrawn" }).eq("id", btn.dataset.swapWithdraw);
+      location.reload();
+    };
+  });
+
+  document.getElementById("swap-partner").onchange = async (ev) => {
+    const partnerId = ev.target.value;
+    const detail = document.getElementById("swap-detail");
+    if (!partnerId) { detail.innerHTML = ""; return; }
+    detail.innerHTML = `<p class="small-muted">読み込み中...</p>`;
+    const theirs = await loadSwapAssigns(partnerId);
+    const theirQuota = studentsById[partnerId] ? studentsById[partnerId].kuroshio_quota || null : null;
+    const rows = [1, 2, 3, 4, 5, 6].map(c => {
+      const a = mine.find(x => x.course_number === c), b = theirs.find(x => x.course_number === c);
+      const blocked = !a || !b || swapBlockedReason(a) || swapBlockedReason(b) || (a && b && a.slot_id === b.slot_id);
+      return `<tr>
+        <td><input type="checkbox" class="swap-course" value="${c}" ${blocked ? "disabled" : ""}/></td>
+        <td>${window.COURSE_LABELS[c - 1]}</td>
+        <td>${esc(swapSlotLabel(a))}</td>
+        <td>${esc(swapSlotLabel(b))}</td>
+      </tr>`;
+    }).join("");
+    detail.innerHTML = `
+      <div style="overflow-x:auto;">
+        <table class="slots"><thead><tr><th></th><th>クール</th><th>あなたの枠</th><th>相手の枠</th></tr></thead><tbody>${rows}</tbody></table>
+      </div>
+      <div id="swap-check" class="notice info" style="margin-top:8px;">交換するクールにチェックを入れてください。</div>
+      <button id="swap-submit" disabled>この内容で交換を申請する</button>
+    `;
+    const update = () => {
+      const courses = [...document.querySelectorAll(".swap-course:checked")].map(x => Number(x.value));
+      const err = courses.length ? validateSwap(mine, theirs, courses, myQuota, theirQuota) : "交換するクールにチェックを入れてください。";
+      const box = document.getElementById("swap-check");
+      box.className = "notice " + (err ? "warn" : "success");
+      box.textContent = err || "この交換は3:3のルールを満たしています。申請できます。";
+      document.getElementById("swap-submit").disabled = !!err;
+    };
+    document.querySelectorAll(".swap-course").forEach(cb => cb.onchange = update);
+    document.getElementById("swap-submit").onclick = async () => {
+      const courses = [...document.querySelectorAll(".swap-course:checked")].map(x => Number(x.value)).sort();
+      if (validateSwap(mine, theirs, courses, myQuota, theirQuota)) return;
+      if (!confirm(`${nameOf(partnerId)} さんに、${courseList(courses)}の交換を申請します。よろしいですか？`)) return;
+      // 相手から同じ内容の申請がすでに来ていれば、その場で交換成立
+      const same = incoming.find(r => r.from_student === String(partnerId)
+        && (r.courses || []).map(Number).sort().join(",") === courses.join(","));
+      if (same) {
+        const err = await executeSwap(same, studentsById);
+        if (err) { alert(err); return; }
+        alert("相手からも同じ申請が来ていたので、交換が成立しました！");
+        location.reload();
+        return;
+      }
+      const { error } = await sb.from("swap_requests").insert({ from_student: myId, to_student: String(partnerId), courses, status: "pending" });
+      if (error) { alert("申請に失敗しました: " + error.message); return; }
+      alert("申請しました。相手が承認すると交換が成立します。");
+      location.reload();
+    };
+  };
+}
