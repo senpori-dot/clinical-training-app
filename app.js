@@ -739,14 +739,17 @@ function attachLodgingHandlers() {
       const choice = btn.dataset.choice;
       const label = choice === "yes" ? "宿泊する" : "宿泊しない";
       if (!confirm(`「${label}」で回答します。よろしいですか？`)) return;
-      await sb.from("assignments").update({ lodging_choice: choice }).eq("id", id);
+      // 回答した時刻も記録する（宿泊の順番を出すため）。列がまだない場合は回答だけ保存
+      const r = await sb.from("assignments").update({ lodging_choice: choice, lodging_answered_at: new Date().toISOString() }).eq("id", id);
+      if (r.error) await sb.from("assignments").update({ lodging_choice: choice }).eq("id", id);
       location.reload();
     };
   });
   document.querySelectorAll(".lodging-change-btn").forEach(btn => {
     btn.onclick = async () => {
       if (!confirm("回答を変更しますか？")) return;
-      await sb.from("assignments").update({ lodging_choice: null }).eq("id", btn.dataset.id);
+      const r = await sb.from("assignments").update({ lodging_choice: null, lodging_answered_at: null }).eq("id", btn.dataset.id);
+      if (r.error) await sb.from("assignments").update({ lodging_choice: null }).eq("id", btn.dataset.id);
       location.reload();
     };
   });

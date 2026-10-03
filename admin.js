@@ -134,6 +134,7 @@ async function renderDashboard() {
       <button data-tab="lodging" class="${activeTab==='lodging'?'active':''}">宿泊希望</button>
       <button data-tab="trade" class="${activeTab==='trade'?'active':''}">トレード</button>
       <button data-tab="stuck" class="${activeTab==='stuck'?'active':''}">詰み確認</button>
+      <button data-tab="roster" class="${activeTab==='roster'?'active':''}">名簿PDF</button>
     </div>
     <div id="tab-content"><p>読み込み中...</p></div>
   `;
@@ -145,6 +146,7 @@ async function renderDashboard() {
   else if (activeTab === "matching") renderMatchingTab();
   else if (activeTab === "lodging") renderLodgingTab();
   else if (activeTab === "stuck") renderStuckTab();
+  else if (activeTab === "roster") renderRosterTab();
   else renderTradeTab();
 }
 
@@ -163,6 +165,115 @@ function isValidFinal(list) {
   if (inN !== 3 || exN !== 3) return false;
   if (!keys.every(k => c[k] >= 1)) return false;
   return [1, 2].some(a => { const t = { IN_N: a, IN_G: 3 - a, EX_N: 3 - a, EX_G: a }; return keys.every(k => c[k] <= t[k]); });
+}
+
+// ============================================================
+// 名簿PDF：全員の確定先を、どのラウンドで決まったかで色分けして表示 → 印刷でPDF保存
+// ============================================================
+async function renderRosterTab() {
+  const el = document.getElementById("tab-content");
+  el.innerHTML = `<p>読み込み中...</p>`;
+  const [{ data: students }, { data: assigns }, { data: prefs }, { data: rounds }] = await Promise.all([
+    sb.from("students").select("id, attendance_number, name").order("attendance_number"),
+    sb.from("assignments").select("student_id, course_number, slot_id, count_exempt, slots(facility_name, department_name, institution_type, category)"),
+    sb.from("preferences").select("student_id, round_id, attempt, slot_id, course_number, paired_course_number").eq("status", "confirmed"),
+    sb.from("rounds").select("id, round_number, title, display_order"),
+  ]);
+  const roundById = {};
+  (rounds || []).forEach(r => { roundById[r.id] = r; });
+
+  // 色（ラウンドごと）
+  const roundKey = r => r.title ? "campaign" : "r" + r.round_number;
+  const STYLE = {
+    r1: { bg: "#ffd6d6", label: "第1希望" }, r2: { bg: "#ffe4c2", label: "第2希望" },
+    r3: { bg: "#fff3a8", label: "第3希望" }, r4: { bg: "#d4f2d4", label: "第4希望" },
+    campaign: { bg: "#c4ecec", label: "キャンペーン" }, r5: { bg: "#d4e2ff", label: "第5希望" },
+    r6: { bg: "#e6d4ff", label: "第6希望" },
+    kuroshio: { bg: "#d9d9d9", label: "黒潮（事前確定）" }, abroad: { bg: "#eeeeee", label: "留学" },
+    trade: { bg: "#f8d0e6", label: "トレード・空き枠移動" }, manual: { bg: "#ffffff", label: "個別登録" },
+  };
+
+  const prefsOf = {};
+  (prefs || []).forEach(p => { (prefsOf[String(p.student_id)] = prefsOf[String(p.student_id)] || []).push(p); });
+  const cellOf = {};
+  (assigns || []).forEach(a => { cellOf[String(a.student_id) + "_" + a.course_number] = a; });
+
+  function classify(a) {
+    const dep = (a.slots.department_name || "") + (a.slots.facility_name || "");
+    if (a.count_exempt) return { key: "abroad", sub: "" };
+    const ps = (prefsOf[String(a.student_id)] || []).filter(p =>
+      Number(p.course_number) === a.course_number || Number(p.paired_course_number) === a.course_number);
+    const exact = ps.find(p => String(p.slot_id) === String(a.slot_id));
+    if (exact) {
+      const r = roundById[exact.round_id];
+      if (r) return { key: roundKey(r), sub: exact.attempt === 2 ? "2次" : exact.attempt === 3 ? "3次" : "" };
+    }
+    if (ps.length > 0) return { key: "trade", sub: "" };
+    if (dep.includes("黒潮医療人養成プロジェクト")) return { key: "kuroshio", sub: "" };
+    return { key: "manual", sub: "" };
+  }
+  const combo = s => (s.institution_type === "internal" ? "院内" : "院外") + (s.category === "internal_medicine" ? "内" : "外");
+
+  const counts = {};
+  const rows = (students || []).map(st => {
+    const tds = [1, 2, 3, 4, 5, 6].map(c => {
+      const a = cellOf[String(st.id) + "_" + c];
+      if (!a) return `<td class="rc" style="background:#fff;color:#c00;">未定</td>`;
+      const k = classify(a);
+      counts[k.key] = (counts[k.key] || 0) + 1;
+      const stl = STYLE[k.key] || STYLE.manual;
+      return `<td class="rc" style="background:${stl.bg};">
+        <div class="rc-f">${esc(a.slots.facility_name)}</div>
+        <div class="rc-d">${esc(a.slots.department_name)}</div>
+        <div class="rc-m">${combo(a.slots)}${k.sub ? "・" + k.sub : ""}</div>
+      </td>`;
+    }).join("");
+    return `<tr><td class="rn">${st.attendance_number}</td><td class="rname">${esc(st.name)}</td>${tds}</tr>`;
+  }).join("");
+
+  const legend = Object.keys(STYLE).filter(k => counts[k]).map(k =>
+    `<span class="rl"><span class="rl-sw" style="background:${STYLE[k].bg};"></span>${STYLE[k].label}（${counts[k]}）</span>`).join("");
+
+  el.innerHTML = `
+    <style>
+      .roster-wrap table { border-collapse: collapse; width: 100%; font-size: 9px; table-layout: fixed; }
+      .roster-wrap th, .roster-wrap td { border: 1px solid #999; padding: 2px 3px; vertical-align: top; }
+      .roster-wrap th { background: #1c3a5e; color: #fff; font-size: 9px; }
+      .roster-wrap .rn { width: 26px; text-align: center; }
+      .roster-wrap .rname { width: 72px; white-space: nowrap; }
+      .roster-wrap .rc-f { font-weight: 700; line-height: 1.15; }
+      .roster-wrap .rc-d { line-height: 1.15; }
+      .roster-wrap .rc-m { color: #555; font-size: 8px; }
+      .roster-wrap td, .roster-wrap th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .rl { display: inline-block; margin: 2px 10px 2px 0; font-size: 11px; }
+      .rl-sw { display: inline-block; width: 12px; height: 12px; border: 1px solid #999; margin-right: 4px; vertical-align: -2px; }
+      @media print {
+        header.top, .admin-tabs, .no-print { display: none !important; }
+        .wrap { max-width: none !important; padding: 0 !important; }
+        .card { border: none !important; padding: 0 !important; }
+        @page { size: A4 landscape; margin: 6mm; }
+        .roster-wrap tr { page-break-inside: avoid; }
+        .roster-wrap thead { display: table-header-group; }
+      }
+    </style>
+    <div class="card no-print">
+      <b>名簿PDF</b>
+      <p class="small-muted">全員の確定先を、どのラウンドで決まったかで色分けしています。下のボタンを押すと印刷画面が開くので、「PDFとして保存」（iPadは共有→プリント→プレビューをピンチアウト→共有で保存）を選んでください。A4横向きで出力されます。</p>
+      <button id="roster-print">PDFとして保存（印刷）</button>
+    </div>
+    <div class="card roster-wrap">
+      <div style="font-weight:700;font-size:13px;margin-bottom:4px;">令和9年度 選択制臨床実習 確定名簿</div>
+      <div style="margin-bottom:6px;">${legend}</div>
+      <table>
+        <thead><tr><th class="rn">番号</th><th class="rname">氏名</th>
+          ${window.COURSE_LABELS.map((l, i) => `<th>${l}<br/><span style="font-weight:400;">${window.COURSE_DATES ? window.COURSE_DATES[i] : ""}</span></th>`).join("")}
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="small-muted" style="margin-top:4px;">出力日時：${new Date().toLocaleString("ja-JP")}</div>
+    </div>
+  `;
+  document.getElementById("roster-print").onclick = () => window.print();
 }
 
 async function renderStuckTab() {
