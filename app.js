@@ -1178,6 +1178,24 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     .eq("attempt", displayAttempt)
     .in("status", ["submitted", "lottery", "confirmed"]);
 
+  // どのラウンドで決まった枠か（名前の色と①〜⑥の印に使う）
+  window.__decided = {};
+  try {
+    const [{ data: cPrefs }, { data: allRounds }] = await Promise.all([
+      sb.from("preferences").select("student_id, slot_id, course_number, paired_course_number, round_id, attempt").eq("status", "confirmed"),
+      sb.from("rounds").select("id, round_number, title, display_order"),
+    ]);
+    const rById = {};
+    (allRounds || []).forEach(r => { rById[r.id] = r; });
+    (cPrefs || []).forEach(p => {
+      const r = rById[p.round_id];
+      if (!r) return;
+      const info = { round_number: r.round_number, title: r.title, order: (r.display_order ?? r.round_number), attempt: p.attempt };
+      window.__decided[String(p.student_id) + "_" + String(p.slot_id) + "_" + p.course_number] = info;
+      if (p.paired_course_number) window.__decided[String(p.student_id) + "_" + String(p.slot_id) + "_" + p.paired_course_number] = info;
+    });
+  } catch (e) { console.error("決定ラウンドの取得に失敗しました", e); }
+
   const { data: allAssignments } = await sb
     .from("assignments")
     .select("*, students(attendance_number, name)");
@@ -1301,7 +1319,7 @@ function renderLegend(globalRevealed) {
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/満員(確定)/対象者限定</span>
         <span><span class="sw" style="background:#ede4f7;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">枠の縁の色は希望者数の状況（青=空きあり、オレンジ=ちょうど定員、赤=超過）を常に表示します。すでに確定人数だけで満員になった枠は、他の未確定枠と区別しやすいようグレー表示にしています。院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。③クールの院内外科の「うち必須◯名」は、希望者のうち、③クールで院内外科を取らないと3:3のルールで6クールを揃えられなくなる人の人数です（誰かは表示されません）。</p>
+      <p class="small-muted">枠の縁の色は希望者数の状況（青=空きあり、オレンジ=ちょうど定員、赤=超過）を常に表示します。すでに確定人数だけで満員になった枠は、他の未確定枠と区別しやすいようグレー表示にしています。院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。確定者の名前の前の①〜⑥は、何番目の希望（ラウンド）で決まったかです（🎁はキャンペーン、「2次」は2次マッチング）。名前の色もラウンドごとに分けていて（①赤・②オレンジ・③黄土・④緑・⑤青・⑥紫・🎁青緑）、同じ枠の中では早く決まった人から順に並んでいます。印がない人は黒潮・個別登録などです。③クールの院内外科の「うち必須◯名」は、希望者のうち、③クールで院内外科を取らないと3:3のルールで6クールを揃えられなくなる人の人数です（誰かは表示されません）。</p>
     </div>
   `);
 }
@@ -1468,11 +1486,32 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   // トレード（交換）で入れ替わった枠は紫色＋🔄で表示する
   const swapMark = a => a.swapped ? `<span style="color:#7b3fb3;font-weight:800;">🔄</span>` : "";
   const swapStyle = a => a.swapped ? ` style="color:#7b3fb3;"` : "";
-  const confirmedNamesHtml = confirmedHere.map(a =>
-    a.students.attendance_number === student.attendance_number
-      ? `<span class="me-confirmed"${swapStyle(a)}>✔ ${swapMark(a)}${esc(a.students.name)}(あなた)</span>${lodgingTag(a)}`
-      : `<b class="${lodging ? (a.lodging_choice === 'yes' ? 'name-lodging-yes' : a.lodging_choice === 'no' ? 'name-lodging-no' : 'name-lodging-unanswered') : ''}"${swapStyle(a)}>${swapMark(a)}${esc(a.students.name)}</b>${lodgingTag(a)}`
-  ).join("<br>");
+  // 何ラウンドで決まったか：①〜⑥（キャンペーンは🎁）の印と、名前の色で表示。早く決まった人から順に並べる
+  const decidedOf = a => (window.__decided || {})[String(a.student_id) + "_" + String(a.slot_id) + "_" + courseNumber];
+  const ROUND_COLOR = { 1: "#c62828", 2: "#e67e00", 3: "#9a7d00", 4: "#2e7d32", 5: "#1565c0", 6: "#6a1b9a" };
+  const roundMark = d => {
+    if (!d) return "";
+    const color = d.title ? "#00838f" : (ROUND_COLOR[d.round_number] || "#555");
+    const mark = d.title ? "🎁" : (["", "①", "②", "③", "④", "⑤", "⑥"][d.round_number] || d.round_number);
+    return `<span style="color:${color};font-weight:800;">${mark}${d.attempt === 2 ? "<small>2次</small>" : ""}</span>`;
+  };
+  const roundNameStyle = d => {
+    if (!d || lodging) return ""; // 宿泊ありの枠は名前の色＝宿泊の回答なので、印だけ付ける
+    const color = d.title ? "#00838f" : (ROUND_COLOR[d.round_number] || "");
+    return color ? ` style="color:${color};"` : "";
+  };
+  const sortedConfirmed = confirmedHere.slice().sort((x, y) => {
+    const dx = decidedOf(x), dy = decidedOf(y);
+    const ox = dx ? dx.order * 10 + (dx.attempt || 1) : 9999;
+    const oy = dy ? dy.order * 10 + (dy.attempt || 1) : 9999;
+    return ox - oy;
+  });
+  const confirmedNamesHtml = sortedConfirmed.map(a => {
+    const d = decidedOf(a);
+    return a.students.attendance_number === student.attendance_number
+      ? `<span class="me-confirmed"${swapStyle(a)}>✔ ${swapMark(a)}${roundMark(d)}${esc(a.students.name)}(あなた)</span>${lodgingTag(a)}`
+      : `<b class="${lodging ? (a.lodging_choice === 'yes' ? 'name-lodging-yes' : a.lodging_choice === 'no' ? 'name-lodging-no' : 'name-lodging-unanswered') : ''}"${a.swapped ? swapStyle(a) : roundNameStyle(d)}>${swapMark(a)}${roundMark(d)}${esc(a.students.name)}</b>${lodgingTag(a)}`;
+  }).join("<br>");
 
   // 匿名ルール：
   // ・宿泊が絡む施設 → 最初から全員に氏名を表示（部屋割り調整のため）。
