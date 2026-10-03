@@ -9,6 +9,22 @@ window.tryRunLotteryIfDue = async function (sb, round) {
   if (!round) return round;
   const now = new Date();
 
+  // 「処理中」のまま5分以上止まっている場合（抽選中にページが閉じられた等）は、元の状態に戻して再開する
+  if (round.phase && round.phase.endsWith("_processing")) {
+    const startedAt = round.processing_at ? new Date(round.processing_at).getTime() : 0;
+    if (!startedAt || now.getTime() - startedAt > 5 * 60 * 1000) {
+      const basePhase = round.phase.replace("_processing", "");
+      const { data: reset } = await sb.from("rounds")
+        .update({ phase: basePhase })
+        .eq("id", round.id).eq("phase", round.phase)
+        .select();
+      if (reset && reset.length > 0) round = reset[0];
+      else return round;
+    } else {
+      return round;
+    }
+  }
+
   let phaseToProcess = null;
   if (round.phase === "first_choice" && round.end_at && now > new Date(round.end_at)) {
     phaseToProcess = "first_choice";
@@ -22,7 +38,7 @@ window.tryRunLotteryIfDue = async function (sb, round) {
   const lockPhase = phaseToProcess + "_processing";
   const { data: locked } = await sb
     .from("rounds")
-    .update({ phase: lockPhase })
+    .update({ phase: lockPhase, processing_at: new Date().toISOString() })
     .eq("id", round.id)
     .eq("phase", phaseToProcess)
     .select();
@@ -184,11 +200,131 @@ window.runLotteryCore = async function (sb, round, phaseToProcess) {
     }
   }
 
+  // 外れた人がいたかは、今回処理した分だけでなく、この回の全員分をDBから数え直して判定する
+  // （抽選が途中で止まって再開した場合でも、前半で外れた人を見落とさないため）
+  let totalLost = lostCount;
+  if (phaseToProcess === "first_choice") {
+    const { count } = await sb.from("preferences")
+      .select("id", { count: "exact", head: true })
+      .eq("round_id", round.id).eq("attempt", 1).eq("status", "lost");
+    if (typeof count === "number") totalLost = Math.max(totalLost, count);
+  }
   const nextPhase = phaseToProcess === "first_choice"
-    ? (lostCount > 0 ? "second_match" : "closed")
+    ? (totalLost > 0 ? "second_match" : "closed")
     : "closed";
 
   await sb.from("rounds").update({ phase: nextPhase }).eq("id", round.id);
 
   return { confirmedCount, lostCount, nextPhase };
+};
+
+// ============================================================
+// 空き枠トレード（自分の確定枠 → 同じクール・同じ種類の空き枠へ移動）
+// ・締切までに申請を集め、締切後に移動先ごとに抽選する
+// ・当たれば移動、外れれば元の枠のまま
+// ・処理後に「空いた枠」を記録し、学生画面でアナウンスする
+// ・move_runs（回）ごとに開始・締切を設定できる（何回でも）
+// ============================================================
+function moveComboKey(s) {
+  return (s.institution_type === "internal" ? "IN" : "EX") + "_" + (s.category === "internal_medicine" ? "N" : "G");
+}
+
+window.tryRunMoveIfDue = async function (sb) {
+  try {
+    const { data: runs } = await sb.from("move_runs").select("*").order("run_number");
+    if (!runs) return;
+    const now = Date.now();
+    for (const run of runs) {
+      // 処理中のまま5分以上止まっていたら再開できるように戻す
+      if (run.status === "processing") {
+        const st = run.processing_at ? new Date(run.processing_at).getTime() : 0;
+        if (!st || now - st > 5 * 60 * 1000) {
+          await sb.from("move_runs").update({ status: "open" }).eq("id", run.id).eq("status", "processing");
+          run.status = "open";
+        } else continue;
+      }
+      if (run.status !== "open" || !run.deadline || now <= new Date(run.deadline).getTime()) continue;
+      const { data: locked } = await sb.from("move_runs")
+        .update({ status: "processing", processing_at: new Date().toISOString() })
+        .eq("id", run.id).eq("status", "open").select();
+      if (!locked || locked.length === 0) continue;
+      try {
+        await window.runMoveCore(sb, run);
+      } catch (e) {
+        console.error("空き枠トレードの処理でエラー。再試行できるように戻します", e);
+        await sb.from("move_runs").update({ status: "open" }).eq("id", run.id).eq("status", "processing");
+      }
+    }
+  } catch (e) { console.error(e); }
+};
+
+window.runMoveCore = async function (sb, run) {
+  const { data: reqs } = await sb.from("move_requests").select("*").eq("run_id", run.id).eq("status", "pending");
+  const { data: slots } = await sb.from("slots").select("id, facility_name, department_name, institution_type, category, cap_1, cap_2, cap_3, cap_4, cap_5, cap_6");
+  const slotMap = {};
+  (slots || []).forEach(s => { slotMap[String(s.id)] = s; });
+  const { data: lim } = await sb.from("facility_limits").select("*");
+  const limMap = {};
+  (lim || []).forEach(f => { limMap[f.facility_name] = f.max_total; });
+  const { data: assigns } = await sb.from("assignments").select("id, student_id, course_number, slot_id");
+  const used = {}, facUsed = {};
+  (assigns || []).forEach(a => {
+    const k = String(a.slot_id) + "_" + a.course_number;
+    used[k] = (used[k] || 0) + 1;
+    const s = slotMap[String(a.slot_id)];
+    if (s) facUsed[s.facility_name + "_" + a.course_number] = (facUsed[s.facility_name + "_" + a.course_number] || 0) + 1;
+  });
+  const hasRoom = (slotId, c) => {
+    const s = slotMap[String(slotId)];
+    if (!s) return false;
+    if ((used[String(slotId) + "_" + c] || 0) >= (s["cap_" + c] || 0)) return false;
+    const l = limMap[s.facility_name];
+    if (l != null && (facUsed[s.facility_name + "_" + c] || 0) >= l) return false;
+    return true;
+  };
+
+  // 偏りのないシャッフル
+  const list = (reqs || []).slice();
+  for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+
+  const freed = [];
+  for (const r of list) {
+    const c = Number(r.course_number);
+    const cur = (assigns || []).find(a => String(a.student_id) === String(r.student_id) && a.course_number === c);
+    const from = slotMap[String(r.from_slot)], to = slotMap[String(r.to_slot)];
+    // 申請後に枠が変わっていたり、種類が違う場合は無効
+    if (!cur || String(cur.slot_id) !== String(r.from_slot) || !from || !to || moveComboKey(from) !== moveComboKey(to)) {
+      await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id);
+      continue;
+    }
+    if (!hasRoom(r.to_slot, c)) {
+      await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id);
+      continue;
+    }
+    const { error } = await sb.from("assignments").update({ slot_id: r.to_slot, lodging_choice: null }).eq("id", cur.id);
+    if (error) { await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id); continue; }
+    await sb.from("move_requests").update({ status: "won" }).eq("id", r.id);
+    // 使用数を更新（移動先+1、移動元-1）
+    const kTo = String(r.to_slot) + "_" + c, kFrom = String(r.from_slot) + "_" + c;
+    used[kTo] = (used[kTo] || 0) + 1;
+    used[kFrom] = Math.max(0, (used[kFrom] || 0) - 1);
+    facUsed[to.facility_name + "_" + c] = (facUsed[to.facility_name + "_" + c] || 0) + 1;
+    facUsed[from.facility_name + "_" + c] = Math.max(0, (facUsed[from.facility_name + "_" + c] || 0) - 1);
+    cur.slot_id = r.to_slot;
+    freed.push({ slot_id: String(r.from_slot), course: c });
+  }
+
+  // 空いた枠（処理後にまだ空きがあるもの）を記録してアナウンスに使う
+  const seen = new Set();
+  const announce = [];
+  for (const f of freed) {
+    const key = f.slot_id + "_" + f.course;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (hasRoom(f.slot_id, f.course)) {
+      const s = slotMap[f.slot_id];
+      announce.push({ slot_id: f.slot_id, course: f.course, facility_name: s.facility_name, department_name: s.department_name, combo: moveComboKey(s) });
+    }
+  }
+  await sb.from("move_runs").update({ status: "done", freed: announce, done_at: new Date().toISOString() }).eq("id", run.id);
 };

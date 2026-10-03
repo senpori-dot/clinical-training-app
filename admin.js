@@ -289,6 +289,74 @@ async function renderStuckTab() {
 // ============================================================
 // トレード期間の管理
 // ============================================================
+// ============================================================
+// 空き枠トレードの回（開始・締切）の管理
+// ============================================================
+async function renderMoveRunsCard() {
+  if (window.tryRunMoveIfDue) await window.tryRunMoveIfDue(sb);
+  const { data: runs, error } = await sb.from("move_runs").select("*").order("run_number");
+  if (error) {
+    return `<div class="card"><b>空き枠トレード</b><p class="small-muted">move_runs の表がありません。SQLを実行してください（${esc(error.message)}）</p></div>`;
+  }
+  const { data: reqs } = await sb.from("move_requests").select("run_id, status");
+  const cnt = {};
+  (reqs || []).forEach(r => {
+    const c = cnt[r.run_id] || (cnt[r.run_id] = { pending: 0, won: 0, lost: 0 });
+    if (c[r.status] != null) c[r.status]++;
+  });
+  const statusLabel = { open: "受付中／受付前", processing: "抽選処理中", done: "✅ 抽選済み" };
+  const rows = (runs || []).map(r => {
+    const c = cnt[r.id] || { pending: 0, won: 0, lost: 0 };
+    const freed = Array.isArray(r.freed) ? r.freed : [];
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border);">
+      <b>第${r.run_number}回</b>　${statusLabel[r.status] || r.status}
+      <span class="small-muted">（申請中${c.pending}・成立${c.won}・外れ${c.lost}）</span>
+      ${r.status === "open" ? `
+        <div style="margin-top:6px;">
+          <label class="small-muted">申請開始</label>
+          <input type="datetime-local" class="mv-start" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.start_at)}" />
+          <label class="small-muted">締切（この時刻を過ぎると自動で抽選）</label>
+          <input type="datetime-local" class="mv-deadline" data-id="${r.id}" value="${toLocalInputValueOrEmpty(r.deadline)}" />
+          <button class="small mv-save" data-id="${r.id}">日時を保存</button>
+          <button class="small secondary mv-del" data-id="${r.id}">この回を削除</button>
+        </div>` : ""}
+      ${r.status === "done" ? `<div class="small-muted" style="margin-top:4px;">空いた枠：${freed.length ? freed.map(f => `${window.COURSE_LABELS[f.course - 1]} ${esc(f.facility_name)} ${esc(f.department_name)}`).join("、") : "なし"}</div>` : ""}
+    </div>`;
+  }).join("");
+  return `<div class="card">
+    <b>空き枠トレード（同じクール・同じ種類の空き枠への移動）</b>
+    <p class="small-muted">回ごとに申請開始と締切を設定します。締切を過ぎて誰かがページを開くと自動で抽選され、当たった人は移動、外れた人は元の枠のままです。抽選後、新しく空いた枠が学生画面でアナウンスされます。</p>
+    ${rows || '<p class="small-muted">まだ回がありません。</p>'}
+    <button class="small" id="mv-add" style="margin-top:8px;">回を追加</button>
+  </div>`;
+}
+function attachMoveRunsHandlers(rerender) {
+  const addBtn = document.getElementById("mv-add");
+  if (addBtn) addBtn.onclick = async () => {
+    const { data: runs } = await sb.from("move_runs").select("run_number");
+    const next = (runs || []).reduce((m, r) => Math.max(m, r.run_number || 0), 0) + 1;
+    const { error } = await sb.from("move_runs").insert({ run_number: next, status: "open" });
+    if (error) { alert("追加に失敗しました: " + error.message); return; }
+    rerender();
+  };
+  document.querySelectorAll(".mv-save").forEach(b => b.onclick = async () => {
+    const id = b.dataset.id;
+    const v = cls => { const el = document.querySelector(`.${cls}[data-id="${id}"]`); return el && el.value ? new Date(el.value).toISOString() : null; };
+    const start_at = v("mv-start"), deadline = v("mv-deadline");
+    if (start_at && deadline && new Date(deadline) <= new Date(start_at)) { alert("締切は申請開始より後にしてください。"); return; }
+    const { error } = await sb.from("move_runs").update({ start_at, deadline }).eq("id", id);
+    if (error) { alert("保存に失敗しました: " + error.message); return; }
+    alert("保存しました。");
+    rerender();
+  });
+  document.querySelectorAll(".mv-del").forEach(b => b.onclick = async () => {
+    if (!confirm("この回を削除しますか？（申請も無効になります）")) return;
+    await sb.from("move_requests").update({ status: "withdrawn" }).eq("run_id", b.dataset.id).eq("status", "pending");
+    await sb.from("move_runs").delete().eq("id", b.dataset.id);
+    rerender();
+  });
+}
+
 async function renderTradeTab() {
   const { data: settings } = await sb.from("trade_settings").select("*").eq("id", 1).maybeSingle();
 
@@ -323,6 +391,7 @@ async function renderTradeTab() {
     </tr>
   `).join("");
 
+  const moveRunsHtml = await renderMoveRunsCard();
   document.getElementById("tab-content").innerHTML = `
     <div class="card">
       <b>トレード期間の設定</b>
@@ -341,6 +410,7 @@ async function renderTradeTab() {
       <button id="save-trade-settings">保存</button>
       <div id="trade-save-result" class="small-muted" style="margin-top:8px;"></div>
     </div>
+    ${moveRunsHtml}
     <div class="card">
       <b>友達同士のトレード（新しい順）</b>
       <div style="overflow-x:auto;">
@@ -358,6 +428,8 @@ async function renderTradeTab() {
       </table>
     </div>
   `;
+
+  attachMoveRunsHandlers(renderTradeTab);
 
   // 成立したトレードを元に戻す（交換前の枠に入れ替え直す）
   document.querySelectorAll("[data-swap-revert]").forEach(btn => {
@@ -714,6 +786,7 @@ async function renderMatchingTab() {
   }
 
   const round = await window.tryRunLotteryIfDue(sb, round0);
+  if (window.tryRunMoveIfDue) await window.tryRunMoveIfDue(sb);
 
   if (round.phase.endsWith("_processing")) {
     document.getElementById("tab-content").innerHTML = `<div class="notice info">現在、自動抽選を処理中です。数秒後に再読み込みしてください。</div>`;

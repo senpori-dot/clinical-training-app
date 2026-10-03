@@ -671,6 +671,7 @@ async function main() {
     .maybeSingle();
 
   const round = await window.tryRunLotteryIfDue(sb, round0);
+  if (window.tryRunMoveIfDue) await window.tryRunMoveIfDue(sb); // 空き枠トレードの締切が過ぎていれば抽選
 
   const { data: assignments } = await sb
     .from("assignments")
@@ -1124,6 +1125,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   appEl.innerHTML = html;
   attachLodgingHandlers();
   attachCancelHandler(student);
+  try { await renderMoveSection(student); } catch (e) { console.error("空き枠トレード欄の表示に失敗しました", e); }
   try { await renderSwapSection(student, assignments); } catch (e) { console.error("トレード欄の表示に失敗しました", e); }
   if (allDone) {
     maybeShowResultReveal("all-done-" + student.id, "alldone", "6クールすべての実習先が決まりました。お疲れ様でした！");
@@ -1971,4 +1973,142 @@ async function renderSwapSection(student, myAssignsRaw) {
       location.reload();
     };
   };
+}
+
+
+// ============================================================
+// 空き枠トレード（学生画面）
+// 自分の確定枠を、同じクール・同じ種類（院内内科・院内外科・院外内科・院外外科）の空き枠に移す申請。
+// 締切後に移動先ごとに抽選し、当たれば移動、外れれば元の枠のまま。
+// ============================================================
+async function renderMoveSection(student) {
+  const { data: runs } = await sb.from("move_runs").select("*").order("run_number");
+  if (!runs || runs.length === 0) return;
+  const now = Date.now();
+  const openRun = runs.find(r => r.status === "open" && r.start_at && r.deadline
+    && now >= new Date(r.start_at).getTime() && now <= new Date(r.deadline).getTime());
+  const upcoming = runs.find(r => r.status === "open" && r.start_at && now < new Date(r.start_at).getTime());
+  const doneRuns = runs.filter(r => r.status === "done");
+  const lastDone = doneRuns[doneRuns.length - 1];
+  const KL = { IN_N: "院内・内科系", IN_G: "院内・外科系", EX_N: "院外・内科系", EX_G: "院外・外科系" };
+  const myId = String(student.id);
+
+  let html = "";
+
+  // 直近の結果とアナウンス
+  if (lastDone) {
+    const { data: myRes } = await sb.from("move_requests").select("*").eq("run_id", lastDone.id).eq("student_id", myId);
+    const { data: slotNames } = await sb.from("slots").select("id, facility_name, department_name");
+    const nm = {};
+    (slotNames || []).forEach(x => { nm[String(x.id)] = `${x.facility_name} ${x.department_name}`; });
+    const resHtml = (myRes || []).filter(r => r.status === "won" || r.status === "lost").map(r =>
+      r.status === "won"
+        ? `<div class="notice success">🎉 ${window.COURSE_LABELS[r.course_number - 1]}：「${esc(nm[String(r.to_slot)] || "")}」への移動が成立しました。</div>`
+        : `<div class="notice warn">${window.COURSE_LABELS[r.course_number - 1]}：「${esc(nm[String(r.to_slot)] || "")}」への移動は抽選に外れたため、元の「${esc(nm[String(r.from_slot)] || "")}」のままです。</div>`
+    ).join("");
+    const freed = Array.isArray(lastDone.freed) ? lastDone.freed : [];
+    const freedHtml = freed.length
+      ? `<ul style="margin:6px 0 0;padding-left:18px;">${freed.map(f => `<li>${window.COURSE_LABELS[f.course - 1]}：${esc(f.facility_name)} ${esc(f.department_name)}（${KL[f.combo] || ""}）</li>`).join("")}</ul>`
+      : `<div class="small-muted">新しく空いた枠はありませんでした。</div>`;
+    html += `${resHtml}
+      <div class="card" style="border:2px solid #2e7d6b;">
+        <b>📢 第${lastDone.run_number}回 空き枠トレードの結果：新しく空いた枠</b>
+        ${freedHtml}
+        ${upcoming || openRun ? `<div class="small-muted" style="margin-top:6px;">次の回で、これらの枠への移動を申請できます。</div>` : ""}
+      </div>`;
+  }
+
+  if (upcoming && !openRun) {
+    html += `<div class="card"><b>🔁 空き枠トレード 第${upcoming.run_number}回</b>
+      <div class="small-muted">申請受付は ${fmtDate(upcoming.start_at)} から ${fmtDate(upcoming.deadline)} までです。</div></div>`;
+  }
+
+  if (openRun) {
+    const [{ data: mine }, { data: slots }, { data: allAs }, { data: lim }, { data: myReqs }] = await Promise.all([
+      sb.from("assignments").select("id, course_number, slot_id, count_exempt, slots(facility_name, department_name, institution_type, category)").eq("student_id", student.id),
+      sb.from("slots").select("*").eq("active", true),
+      sb.from("assignments").select("slot_id, course_number"),
+      sb.from("facility_limits").select("*"),
+      sb.from("move_requests").select("*").eq("run_id", openRun.id).eq("student_id", myId).eq("status", "pending"),
+    ]);
+    const used = {}, facUsed = {}, slotById = {};
+    (slots || []).forEach(x => { slotById[String(x.id)] = x; });
+    (allAs || []).forEach(a => {
+      used[String(a.slot_id) + "_" + a.course_number] = (used[String(a.slot_id) + "_" + a.course_number] || 0) + 1;
+      const x = slotById[String(a.slot_id)];
+      if (x) facUsed[x.facility_name + "_" + a.course_number] = (facUsed[x.facility_name + "_" + a.course_number] || 0) + 1;
+    });
+    const limMap = {};
+    (lim || []).forEach(f => { limMap[f.facility_name] = f.max_total; });
+    const remainOf = (x, c) => {
+      let r = (x["cap_" + c] || 0) - (used[String(x.id) + "_" + c] || 0);
+      const l = limMap[x.facility_name];
+      if (l != null) r = Math.min(r, l - (facUsed[x.facility_name + "_" + c] || 0));
+      return r;
+    };
+    const myQuota = student.kuroshio_quota || null;
+
+    const rows = (mine || []).sort((a, b) => a.course_number - b.course_number).map(a => {
+      const c = a.course_number;
+      const dep = (a.slots.department_name || "") + (a.slots.facility_name || "");
+      if (a.count_exempt || dep.includes("黒潮医療人養成プロジェクト")) {
+        return `<tr><td>${window.COURSE_LABELS[c - 1]}</td><td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}</td><td class="small-muted">この枠は移動できません</td></tr>`;
+      }
+      const key = (a.slots.institution_type === "internal" ? "IN" : "EX") + "_" + (a.slots.category === "internal_medicine" ? "N" : "G");
+      const cands = (slots || []).filter(x => {
+        if (String(x.id) === String(a.slot_id)) return false;
+        if ((x.institution_type === "internal" ? "IN" : "EX") + "_" + (x.category === "internal_medicine" ? "N" : "G") !== key) return false;
+        const xd = (x.department_name || "") + (x.facility_name || "");
+        if (xd.includes("黒潮医療人養成プロジェクト") && !(Array.isArray(x.new_courses) && x.new_courses.map(Number).includes(c))) return false;
+        if ((x.facility_name || "").startsWith("留学")) return false;
+        if (!quotaAllows(x, myQuota)) return false;
+        return remainOf(x, c) > 0;
+      });
+      const pending = (myReqs || []).find(r => r.course_number === c);
+      const opts = cands.map(x => `<option value="${x.id}" ${pending && String(pending.to_slot) === String(x.id) ? "selected" : ""}>${esc(x.facility_name)} ${esc(x.department_name)}（残り${remainOf(x, c)}）</option>`).join("");
+      return `<tr>
+        <td>${window.COURSE_LABELS[c - 1]}</td>
+        <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}<br/><span class="small-muted">${KL[key]}</span></td>
+        <td>${cands.length === 0 ? `<span class="small-muted">移動できる空き枠はありません</span>` : `
+          <select class="move-target" data-course="${c}" data-from="${a.slot_id}">
+            <option value="">（移動しない）</option>${opts}
+          </select>`}
+          ${pending ? `<div class="small-muted" style="color:#2e7d6b;">申請中</div>` : ""}
+        </td>
+      </tr>`;
+    }).join("");
+
+    html += `<div class="card" style="border:2px solid #2fa3c9;">
+      <b>🔁 空き枠トレード 第${openRun.run_number}回（申請受付中）</b>
+      <div class="countdown-box" style="margin:6px 0;">締切：${fmtDate(openRun.deadline)}</div>
+      <p class="small-muted">今の確定枠を、同じクール・同じ種類（院内内科・院内外科・院外内科・院外外科）の空き枠に移したい場合は、移動先を選んで「申請を保存」を押してください。締切後に抽選し、当たれば移動、外れれば今の枠のままです。種類が同じなので3:3のルールは崩れません。宿泊の回答は移動後にやり直しになります。</p>
+      <div style="overflow-x:auto;"><table class="slots"><thead><tr><th>クール</th><th>今の枠</th><th>移動先</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <button id="move-save" style="margin-top:8px;">申請を保存</button>
+    </div>`;
+  }
+
+  if (!html) return;
+  appEl.insertAdjacentHTML("beforeend", html);
+
+  const saveBtn = document.getElementById("move-save");
+  if (saveBtn && openRun) {
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      const sels = [...document.querySelectorAll(".move-target")];
+      // いったんこの回の自分の申請を取り下げて、選んだ内容で出し直す
+      await sb.from("move_requests").update({ status: "withdrawn" })
+        .eq("run_id", openRun.id).eq("student_id", myId).eq("status", "pending");
+      const rows = sels.filter(x => x.value).map(x => ({
+        run_id: openRun.id, student_id: myId,
+        course_number: Number(x.dataset.course), from_slot: String(x.dataset.from), to_slot: String(x.value),
+        status: "pending",
+      }));
+      if (rows.length > 0) {
+        const { error } = await sb.from("move_requests").insert(rows);
+        if (error) { alert("保存に失敗しました: " + error.message); saveBtn.disabled = false; return; }
+      }
+      alert(rows.length > 0 ? `${rows.length}件の移動を申請しました。締切後に抽選されます。` : "申請をすべて取り下げました。");
+      location.reload();
+    };
+  }
 }
