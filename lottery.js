@@ -293,7 +293,8 @@ window.runMoveCore = async function (sb, run) {
     const cur = (assigns || []).find(a => String(a.student_id) === String(r.student_id) && a.course_number === c);
     const from = slotMap[String(r.from_slot)], to = slotMap[String(r.to_slot)];
     // 申請後に枠が変わっていたり、種類が違う場合は無効
-    if (!cur || String(cur.slot_id) !== String(r.from_slot) || !from || !to || moveComboKey(from) !== moveComboKey(to)) {
+    // allow_cross＝学年代表が個別に認めた「種類の違う枠への移動」の申請（種類のチェックを省く）
+    if (!cur || String(cur.slot_id) !== String(r.from_slot) || !from || !to || (!r.allow_cross && moveComboKey(from) !== moveComboKey(to))) {
       await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id);
       continue;
     }

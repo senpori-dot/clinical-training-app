@@ -2107,6 +2107,13 @@ async function renderMoveSection(student) {
         return remainOf(x, c) > 0;
       });
       const pending = (myReqs || []).find(r => r.course_number === c);
+      // 学年代表が個別に登録した申請（種類の違う枠への移動など）は、学生側では変更できないようにする
+      if (pending && pending.allow_cross) {
+        const toS = slotById[String(pending.to_slot)];
+        return `<tr><td>${window.COURSE_LABELS[c - 1]}</td>
+          <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}<br/><span class="small-muted">${KL[key]}</span></td>
+          <td><b>${toS ? esc(toS.facility_name + " " + toS.department_name) : "（移動先）"}</b><div class="small-muted" style="color:#2e7d6b;">申請中（学年代表が登録した申請です）</div></td></tr>`;
+      }
       const opts = cands.map(x => `<option value="${x.id}" ${pending && String(pending.to_slot) === String(x.id) ? "selected" : ""}>${esc(x.facility_name)} ${esc(x.department_name)}（残り${remainOf(x, c)}）</option>`).join("");
       return `<tr>
         <td>${window.COURSE_LABELS[c - 1]}</td>
@@ -2139,7 +2146,8 @@ async function renderMoveSection(student) {
       const sels = [...document.querySelectorAll(".move-target")];
       // いったんこの回の自分の申請を取り下げて、選んだ内容で出し直す
       await sb.from("move_requests").update({ status: "withdrawn" })
-        .eq("run_id", openRun.id).eq("student_id", myId).eq("status", "pending");
+        .eq("run_id", openRun.id).eq("student_id", myId).eq("status", "pending")
+        .or("allow_cross.is.null,allow_cross.eq.false"); // 学年代表が登録した申請は残す
       const rows = sels.filter(x => x.value).map(x => ({
         run_id: openRun.id, student_id: myId,
         course_number: Number(x.dataset.course), from_slot: String(x.dataset.from), to_slot: String(x.value),
