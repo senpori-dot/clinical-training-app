@@ -1196,6 +1196,22 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     });
   } catch (e) { console.error("決定ラウンドの取得に失敗しました", e); }
 
+  // 受付中の空き枠トレードの申請（表の中に「誰がどこへ申請中か」を出すため）
+  window.__moveReqs = [];
+  try {
+    const { data: openRuns } = await sb.from("move_runs").select("id").eq("status", "open");
+    const ids = (openRuns || []).map(r => r.id);
+    if (ids.length > 0) {
+      const [{ data: mreqs }, { data: mstuds }] = await Promise.all([
+        sb.from("move_requests").select("student_id, course_number, from_slot, to_slot").in("run_id", ids).eq("status", "pending"),
+        sb.from("students").select("id, attendance_number, name"),
+      ]);
+      const nm = {};
+      (mstuds || []).forEach(x => { nm[String(x.id)] = x.name; });
+      window.__moveReqs = (mreqs || []).map(r => Object.assign({}, r, { name: nm[String(r.student_id)] || "" }));
+    }
+  } catch (e) { console.error("空き枠トレードの申請の取得に失敗しました", e); }
+
   const { data: allAssignments } = await sb
     .from("assignments")
     .select("*, students(attendance_number, name)");
@@ -1319,7 +1335,7 @@ function renderLegend(globalRevealed) {
         <span><span class="sw" style="background:#dcdcdc;"></span>受入不可/満員(確定)/対象者限定</span>
         <span><span class="sw" style="background:#ede4f7;"></span>あなたの希望</span>
       </div>
-      <p class="small-muted">枠の縁の色は希望者数の状況（青=空きあり、オレンジ=ちょうど定員、赤=超過）を常に表示します。すでに確定人数だけで満員になった枠は、他の未確定枠と区別しやすいようグレー表示にしています。院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。確定者の名前の前の①〜⑥は、何番目の希望（ラウンド）で決まったかです（🎁はキャンペーン、「2次」は2次マッチング）。名前の色もラウンドごとに分けていて（①赤・②オレンジ・③黄土・④緑・⑤青・⑥紫・🎁青緑）、宿泊ありの枠の宿泊の回答は名前の後ろの「(宿泊する)」などで表示しています。同じ枠の中では早く決まった人から順に並んでいます。印がない人は黒潮・個別登録などです。③クールの院内外科の「うち必須◯名」は、希望者のうち、③クールで院内外科を取らないと3:3のルールで6クールを揃えられなくなる人の人数です（誰かは表示されません）。</p>
+      <p class="small-muted">枠の縁の色は希望者数の状況（青=空きあり、オレンジ=ちょうど定員、赤=超過）を常に表示します。すでに確定人数だけで満員になった枠は、他の未確定枠と区別しやすいようグレー表示にしています。院外の表は、同じ病院ごとに太線で区切っています。施設名をタップすると、宿泊・集合時間・連絡事項の詳細が見られます。定員を超えていても締切までは希望を出せ、締切後に自動で抽選されます。宿泊が絡む施設は最初から氏名が表示されます。宿泊が絡まない施設は、抽選で確定するまで氏名は表示されません（人数のみ）。確定者の名前の前の①〜⑥は、何番目の希望（ラウンド）で決まったかです（🎁はキャンペーン、「2次」は2次マッチング）。名前の色もラウンドごとに分けていて（①赤・②オレンジ・③黄土・④緑・⑤青・⑥紫・🎁青緑）、宿泊ありの枠の宿泊の回答は名前の後ろの「(宿泊する)」などで表示しています。同じ枠の中では早く決まった人から順に並んでいます。印がない人は黒潮・個別登録などです。🔄付きの黒字はトレード・空き枠トレードで入れ替わった枠です。水色の「🔁空き枠トレード申請中」はその枠への移動を申請中の人、「（移動申請中）」はその枠からほかの枠への移動を申請中の人です。③クールの院内外科の「うち必須◯名」は、希望者のうち、③クールで院内外科を取らないと3:3のルールで6クールを揃えられなくなる人の人数です（誰かは表示されません）。</p>
     </div>
   `);
 }
@@ -1484,8 +1500,9 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
   }
 
   // トレード（交換）で入れ替わった枠は紫色＋🔄で表示する
-  const swapMark = a => a.swapped ? `<span style="color:#7b3fb3;font-weight:800;">🔄</span>` : "";
-  const swapStyle = a => a.swapped ? ` style="color:#7b3fb3;"` : "";
+  // トレード・空き枠移動で入れ替わった枠は黒字＋🔄で表示する
+  const swapMark = a => a.swapped ? `<span style="color:#000;font-weight:800;">🔄</span>` : "";
+  const swapStyle = a => a.swapped ? ` style="color:#000;"` : "";
   // 何ラウンドで決まったか：①〜⑥（キャンペーンは🎁）の印と、名前の色で表示。早く決まった人から順に並べる
   const decidedOf = a => (window.__decided || {})[String(a.student_id) + "_" + String(a.slot_id) + "_" + courseNumber];
   const ROUND_COLOR = { 1: "#c62828", 2: "#e67e00", 3: "#9a7d00", 4: "#2e7d32", 5: "#1565c0", 6: "#6a1b9a" };
@@ -1506,12 +1523,20 @@ function renderCell(slot, courseNumber, roundPrefs, allAssignments, student, rou
     const oy = dy ? dy.order * 10 + (dy.attempt || 1) : 9999;
     return ox - oy;
   });
+  const moveReqs = window.__moveReqs || [];
+  const movingOut = a => moveReqs.some(r => String(r.student_id) === String(a.student_id)
+    && String(r.from_slot) === String(slot.id) && Number(r.course_number) === courseNumber);
+  const outTag = a => movingOut(a) ? `<span style="color:#2fa3c9;font-size:0.58rem;font-weight:700;">（移動申請中）</span>` : "";
+  const movingIn = moveReqs.filter(r => String(r.to_slot) === String(slot.id) && Number(r.course_number) === courseNumber);
+  const movingInHtml = movingIn.length
+    ? `<div style="color:#2fa3c9;font-size:0.6rem;font-weight:700;line-height:1.25;margin-top:2px;">🔁空き枠トレード申請中：<br>${movingIn.map(r => esc(r.name)).join("<br>")}</div>`
+    : "";
   const confirmedNamesHtml = sortedConfirmed.map(a => {
     const d = decidedOf(a);
     return a.students.attendance_number === student.attendance_number
-      ? `<span class="me-confirmed"${swapStyle(a)}>✔ ${swapMark(a)}${roundMark(d)}${esc(a.students.name)}(あなた)</span>${lodgingTag(a)}`
-      : `<b class="${lodging ? (a.lodging_choice === 'yes' ? 'name-lodging-yes' : a.lodging_choice === 'no' ? 'name-lodging-no' : 'name-lodging-unanswered') : ''}"${a.swapped ? swapStyle(a) : roundNameStyle(d)}>${swapMark(a)}${roundMark(d)}${esc(a.students.name)}</b>${lodgingTag(a)}`;
-  }).join("<br>");
+      ? `<span class="me-confirmed"${swapStyle(a)}>✔ ${swapMark(a)}${roundMark(d)}${esc(a.students.name)}(あなた)</span>${lodgingTag(a)}${outTag(a)}`
+      : `<b class="${lodging ? (a.lodging_choice === 'yes' ? 'name-lodging-yes' : a.lodging_choice === 'no' ? 'name-lodging-no' : 'name-lodging-unanswered') : ''}"${a.swapped ? swapStyle(a) : roundNameStyle(d)}>${swapMark(a)}${roundMark(d)}${esc(a.students.name)}</b>${lodgingTag(a)}${outTag(a)}`;
+  }).join("<br>") + movingInHtml;
 
   // 匿名ルール：
   // ・宿泊が絡む施設 → 最初から全員に氏名を表示（部屋割り調整のため）。
@@ -2126,6 +2151,33 @@ async function renderMoveSection(student) {
         </td>
       </tr>`;
     }).join("");
+
+    // みんなの申請状況（誰がどこからどこへ申請しているか）
+    const [{ data: allReqs }, { data: allStuds }] = await Promise.all([
+      sb.from("move_requests").select("student_id, course_number, from_slot, to_slot").eq("run_id", openRun.id).eq("status", "pending"),
+      sb.from("students").select("id, attendance_number, name"),
+    ]);
+    const sn = {};
+    (allStuds || []).forEach(x => { sn[String(x.id)] = x; });
+    const slotName = id => { const x = slotById[String(id)]; return x ? `${x.facility_name} ${x.department_name}` : "（無効な枠）"; };
+    const toCount = {};
+    (allReqs || []).forEach(r => { const k = r.to_slot + "_" + r.course_number; toCount[k] = (toCount[k] || 0) + 1; });
+    const publicRows = (allReqs || [])
+      .slice().sort((x, y) => x.course_number - y.course_number || String(x.to_slot).localeCompare(String(y.to_slot)))
+      .map(r => {
+        const st = sn[String(r.student_id)];
+        const toS = slotById[String(r.to_slot)];
+        const remain = toS ? remainOf(toS, r.course_number) : 0;
+        const n = toCount[r.to_slot + "_" + r.course_number] || 0;
+        const comp = n > remain ? `<span style="color:#b3413a;font-weight:700;">抽選（${n}人／空き${remain}）</span>` : `<span class="small-muted">${n}人／空き${remain}</span>`;
+        return `<tr><td>${window.COURSE_LABELS[r.course_number - 1]}</td><td>${st ? st.attendance_number + " " + esc(st.name) : "?"}</td>
+          <td>${esc(slotName(r.from_slot))}</td><td>→</td><td><b>${esc(slotName(r.to_slot))}</b></td><td>${comp}</td></tr>`;
+      }).join("");
+    html += `<div class="card">
+      <b>🔁 みんなの空き枠トレード申請（第${openRun.run_number}回）</b>
+      ${publicRows ? `<div style="overflow-x:auto;"><table class="slots" style="margin-top:6px;"><thead><tr><th>クール</th><th>名前</th><th>今の枠</th><th></th><th>移動したい枠</th><th>状況</th></tr></thead><tbody>${publicRows}</tbody></table></div>`
+        : `<p class="small-muted">まだ申請はありません。</p>`}
+    </div>`;
 
     html += `<div class="card" style="border:2px solid #2fa3c9;">
       <b>🔁 空き枠トレード 第${openRun.run_number}回（申請受付中）</b>

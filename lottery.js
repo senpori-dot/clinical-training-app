@@ -302,7 +302,9 @@ window.runMoveCore = async function (sb, run) {
       await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id);
       continue;
     }
-    const { error } = await sb.from("assignments").update({ slot_id: r.to_slot, lodging_choice: null }).eq("id", cur.id);
+    // 移動した枠は、表の中でトレードと同じ黒字＋🔄で表示する
+    let { error } = await sb.from("assignments").update({ slot_id: r.to_slot, lodging_choice: null, swapped: true }).eq("id", cur.id);
+    if (error) ({ error } = await sb.from("assignments").update({ slot_id: r.to_slot, lodging_choice: null }).eq("id", cur.id));
     if (error) { await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id); continue; }
     await sb.from("move_requests").update({ status: "won" }).eq("id", r.id);
     // 使用数を更新（移動先+1、移動元-1）
