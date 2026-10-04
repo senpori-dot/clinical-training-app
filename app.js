@@ -451,6 +451,27 @@ function popupDue(key) {
   return true;
 }
 
+// 全ラウンド終了のお知らせポップアップ（3時間ごと）
+function maybeShowAllEndedPopup(student) {
+  if (!popupDue(`all_ended_popup_${student.id}`)) return;
+  showOrQueuePopup(() => {
+    const root = document.getElementById("facility-modal-root");
+    const body = `第6希望まですべてのラウンドが終了しました。お疲れ様でした！\n\n残りの手続きはこちらです：\n${window.__endedItemsText || ""}`;
+    root.innerHTML = `
+      <div class="modal-backdrop reveal-backdrop" id="allended-backdrop">
+        <div class="reveal-box" style="background:linear-gradient(135deg,#eaf6f0,#d9f0e0);">
+          <div class="confetti">${["🎉","🎊","✨","🎉"].map((e,i)=>`<span style="--i:${i}">${e}</span>`).join("")}</div>
+          <div class="reveal-emoji">🎉</div>
+          <div class="reveal-title" style="color:#1e6b3a;">全ラウンド終了しました！</div>
+          <div class="reveal-detail" style="text-align:left;">${esc(body)}</div>
+          <button class="secondary" id="allended-close-btn">わかりました</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("allended-close-btn").onclick = closeFacilityModal;
+  });
+}
+
 // 詰みの人へのお知らせポップアップ（ラウンドごとに1回）
 function maybeShowStuckPopup(student, round) {
   const key = `stuck_popup_${student.id}_${round ? round.id : "none"}`;
@@ -804,12 +825,40 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     if (nextRound && nextRound.start_at && now < new Date(nextRound.start_at)) {
       countdownTarget = nextRound.start_at;
       countdownLabel = `${roundLabel(nextRound)} 開始まで`;
+    } else if (!nextRound) {
+      window.__allRoundsEnded = true; // 最後のラウンドが終了した
     } else {
       nextRoundNotice = `<div class="small-muted">次のラウンドの開始時刻は、決まり次第お知らせします。</div>`;
     }
   }
 
-  if (!noRound) {
+  // 全ラウンド終了後：残っている手続き（トレード・宿泊の回答・空き枠トレード）を表示する
+  let endedItemsHtml = "";
+  if (window.__allRoundsEnded) {
+    const md = d => { const x = new Date(d); return `${x.getMonth() + 1}/${x.getDate()}`; };
+    const [{ data: ts }, { data: runs }] = await Promise.all([
+      sb.from("trade_settings").select("*").eq("id", 1).maybeSingle(),
+      sb.from("move_runs").select("*").order("run_number"),
+    ]);
+    const items = [];
+    if (!ts || ts.enabled) items.push(`🔄 友達とのトレード（${ts && ts.end_at ? md(ts.end_at) : "10/6"}まで）`);
+    items.push(`🏨 宿泊するかどうかの回答（${lodgingSettings && lodgingSettings.deadline ? md(lodgingSettings.deadline) : "10/6"}まで）`);
+    const nowMs = Date.now();
+    const openRun = (runs || []).find(r => r.status === "open" && r.start_at && r.deadline && nowMs >= new Date(r.start_at).getTime() && nowMs <= new Date(r.deadline).getTime());
+    const nextRun = (runs || []).find(r => r.status === "open" && r.start_at && nowMs < new Date(r.start_at).getTime());
+    if (openRun) items.push(`🔁 空き枠トレード 第${openRun.run_number}回 開催中（締切 ${fmtDate(openRun.deadline)}）`);
+    else if (nextRun) items.push(`🔁 空き枠トレード 第${nextRun.run_number}回（${fmtDate(nextRun.start_at)} から受付）`);
+    endedItemsHtml = items.map(x => `<li>${x}</li>`).join("");
+    window.__endedItemsText = items.join("\n");
+  }
+
+  if (!noRound && window.__allRoundsEnded) {
+    html += `<div class="round-hero">
+      <div class="round-hero-title">🎉 全ラウンド終了しました！</div>
+      <div style="margin-top:6px;">残りの手続きはこちらです：</div>
+      <ul style="margin:6px 0 0;padding-left:20px;line-height:1.8;">${endedItemsHtml}</ul>
+    </div>`;
+  } else if (!noRound) {
     html += `<div class="round-hero">
       <div class="round-hero-title">${esc(roundLabel(round))} － ${notStarted0 ? "開始前" : (phaseWordMap[round.phase] || round.phase)}</div>
       ${countdownTarget ? `<div class="countdown-box"><span id="countdown-label">${countdownLabel}</span> <span id="countdown-timer">--:--:--</span></div>` : (nextRoundNotice || (!notStarted0 && (round.phase === "second_match" && secondEnded0) || (round.phase === "third_match" && thirdEnded0) || (round.phase === "first_choice" && firstEnded0) ? `<div class="small-muted">まもなく自動で抽選が行われます。</div>` : ""))}
@@ -1128,6 +1177,7 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   appEl.innerHTML = html;
   attachLodgingHandlers();
   attachCancelHandler(student);
+  if (window.__allRoundsEnded) maybeShowAllEndedPopup(student);
   try { await renderMoveSection(student); } catch (e) { console.error("空き枠トレード欄の表示に失敗しました", e); }
   try { await renderSwapSection(student, assignments); } catch (e) { console.error("トレード欄の表示に失敗しました", e); }
   if (allDone) {
