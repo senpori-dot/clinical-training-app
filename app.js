@@ -1365,7 +1365,10 @@ async function renderApp(student, round, assignments, lodgingSettings) {
     const targetCount = targetSet.size;
 
     const attemptWord = displayAttempt === 1 ? "1次" : displayAttempt === 2 ? "2次" : "3次";
-    appEl.insertAdjacentHTML("beforeend", `<div class="card"><b>${votedCount}/${targetCount}人</b><span class="small-muted"> が${attemptWord}マッチングの対象者のうち、すでに希望を提出しています。</span></div>`);
+    // ラウンドが終わっている（全ラウンド終了を含む）ときは、提出人数の欄は出さない
+    if (!window.__allRoundsEnded && round.phase !== "closed") {
+      appEl.insertAdjacentHTML("beforeend", `<div class="card"><b>${votedCount}/${targetCount}人</b><span class="small-muted"> が${attemptWord}マッチングの対象者のうち、すでに希望を提出しています。</span></div>`);
+    }
   }
 
   renderLegend(globalRevealed);
