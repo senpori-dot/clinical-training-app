@@ -2207,7 +2207,7 @@ async function renderMoveSection(student) {
       const key = (a.slots.institution_type === "internal" ? "IN" : "EX") + "_" + (a.slots.category === "internal_medicine" ? "N" : "G");
       const cands = (slots || []).filter(x => {
         if (String(x.id) === String(a.slot_id)) return false;
-        if ((x.institution_type === "internal" ? "IN" : "EX") + "_" + (x.category === "internal_medicine" ? "N" : "G") !== key) return false;
+        // 種類が違う枠も候補に出す（ほかのクールと種類を入れ替える「セット申請」用）
         const xd = (x.department_name || "") + (x.facility_name || "");
         if (xd.includes("黒潮医療人養成プロジェクト") && !(Array.isArray(x.new_courses) && x.new_courses.map(Number).includes(c))) return false;
         if ((x.facility_name || "").startsWith("留学")) return false;
@@ -2222,24 +2222,29 @@ async function renderMoveSection(student) {
           <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}<br/><span class="small-muted">${KL[key]}</span></td>
           <td><b>${toS ? esc(toS.facility_name + " " + toS.department_name) : "（移動先）"}</b><div class="small-muted" style="color:#2e7d6b;">申請中（学年代表が登録した申請です）</div></td></tr>`;
       }
-      const opts = cands.map(x => `<option value="${x.id}" ${pending && String(pending.to_slot) === String(x.id) ? "selected" : ""}>${esc(x.facility_name)} ${esc(x.department_name)}（残り${remainOf(x, c)}）</option>`).join("");
+      const kOf = x => (x.institution_type === "internal" ? "IN" : "EX") + "_" + (x.category === "internal_medicine" ? "N" : "G");
+      // 同じ種類の枠を先に、違う種類の枠を後に並べる
+      const sortedC = cands.slice().sort((x, y) => (kOf(x) === key ? 0 : 1) - (kOf(y) === key ? 0 : 1));
+      const opts = sortedC.map(x => `<option value="${x.id}" data-combo="${kOf(x)}" ${pending && String(pending.to_slot) === String(x.id) ? "selected" : ""}>[${KL[kOf(x)]}] ${esc(x.facility_name)} ${esc(x.department_name)}（残り${remainOf(x, c)}）</option>`).join("");
       return `<tr>
         <td>${window.COURSE_LABELS[c - 1]}</td>
         <td>${esc(a.slots.facility_name)} ${esc(a.slots.department_name)}<br/><span class="small-muted">${KL[key]}</span></td>
         <td>${cands.length === 0 ? `<span class="small-muted">移動できる空き枠はありません</span>` : `
-          <select class="move-target" data-course="${c}" data-from="${a.slot_id}">
+          <select class="move-target" data-course="${c}" data-from="${a.slot_id}" data-combo="${key}">
             <option value="">（移動しない）</option>${opts}
           </select>`}
-          ${pending ? `<div class="small-muted" style="color:#2e7d6b;">申請中</div>` : ""}
+          ${pending ? `<div class="small-muted" style="color:#2e7d6b;">申請中${pending.bundle_id && (myReqs || []).filter(r => r.bundle_id === pending.bundle_id).length > 1 ? "（セット申請）" : ""}</div>` : ""}
         </td>
       </tr>`;
     }).join("");
 
     // みんなの申請状況（誰がどこからどこへ申請しているか）
     const [{ data: allReqs }, { data: allStuds }] = await Promise.all([
-      sb.from("move_requests").select("student_id, course_number, from_slot, to_slot").eq("run_id", openRun.id).eq("status", "pending"),
+      sb.from("move_requests").select("student_id, course_number, from_slot, to_slot, bundle_id").eq("run_id", openRun.id).eq("status", "pending"),
       sb.from("students").select("id, attendance_number, name"),
     ]);
+    const bundleSize = {};
+    (allReqs || []).forEach(r => { if (r.bundle_id) bundleSize[r.bundle_id] = (bundleSize[r.bundle_id] || 0) + 1; });
     const sn = {};
     (allStuds || []).forEach(x => { sn[String(x.id)] = x; });
     const slotName = id => { const x = slotById[String(id)]; return x ? `${x.facility_name} ${x.department_name}` : "（無効な枠）"; };
@@ -2254,7 +2259,7 @@ async function renderMoveSection(student) {
         const n = toCount[r.to_slot + "_" + r.course_number] || 0;
         const comp = n > remain ? `<span style="color:#b3413a;font-weight:700;">抽選（${n}人／空き${remain}）</span>` : `<span class="small-muted">${n}人／空き${remain}</span>`;
         return `<tr><td>${window.COURSE_LABELS[r.course_number - 1]}</td><td>${st ? st.attendance_number + " " + esc(st.name) : "?"}</td>
-          <td>${esc(slotName(r.from_slot))}</td><td>→</td><td><b>${esc(slotName(r.to_slot))}</b></td><td>${comp}</td></tr>`;
+          <td>${esc(slotName(r.from_slot))}</td><td>→</td><td><b>${esc(slotName(r.to_slot))}</b>${r.bundle_id && bundleSize[r.bundle_id] > 1 ? `<div class="small-muted">（セット申請）</div>` : ""}</td><td>${comp}</td></tr>`;
       }).join("");
     html += `<div class="card">
       <b>🔁 みんなの空き枠トレード申請（第${openRun.run_number}回）</b>
@@ -2265,8 +2270,11 @@ async function renderMoveSection(student) {
     html += `<div class="card" style="border:2px solid #2fa3c9;">
       <b>🔁 空き枠トレード 第${openRun.run_number}回（申請受付中）</b>
       <div class="countdown-box" style="margin:6px 0;">締切：${fmtDate(openRun.deadline)}</div>
-      <p class="small-muted">今の確定枠を、同じクール・同じ種類（院内内科・院内外科・院外内科・院外外科）の空き枠に移したい場合は、移動先を選んで「申請を保存」を押してください。締切後に抽選し、当たれば移動、外れれば今の枠のままです。種類が同じなので3:3のルールは崩れません。宿泊の回答は移動後にやり直しになります。</p>
+      <p class="small-muted">今の確定枠を、同じクールの空き枠に移したい場合は、移動先を選んで「申請を保存」を押してください。締切後に抽選し、当たれば移動、外れれば今の枠のままです。宿泊の回答は移動後にやり直しになります。</p>
+      <p class="small-muted"><b>同じ種類への移動</b>（例：⑤の院外外科→⑤の別の院外外科）は、1つずつ抽選されます。<br/>
+      <b>種類を入れ替える移動</b>（例：⑤の院外外科→⑤の院内内科、⑥の院内内科→⑥の院外外科）は、複数のクールをまとめた「セット申請」になり、<b>すべての移動先に当たった場合だけ</b>まとめて移動します。どれか1つでも外れたら、全部今の枠のままです。セット申請は、入れ替える種類の組み合わせが元と同じ（3:3のルールが崩れない）場合だけ保存できます。</p>
       <div style="overflow-x:auto;"><table class="slots"><thead><tr><th>クール</th><th>今の枠</th><th>移動先</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div id="move-check" class="notice info" style="margin-top:8px;">移動したいクールの移動先を選んでください。</div>
       <button id="move-save" style="margin-top:8px;">申請を保存</button>
     </div>`;
   }
@@ -2276,18 +2284,54 @@ async function renderMoveSection(student) {
 
   const saveBtn = document.getElementById("move-save");
   if (saveBtn && openRun) {
+    const KLs = { IN_N: "院内内科", IN_G: "院内外科", EX_N: "院外内科", EX_G: "院外外科" };
+    // 選んだ内容を「同じ種類の移動（1つずつ）」と「種類を入れ替える移動（セット）」に分けてチェックする
+    const analyze = () => {
+      const chosen = [...document.querySelectorAll(".move-target")].filter(x => x.value).map(x => ({
+        course: Number(x.dataset.course), from: String(x.dataset.from), to: String(x.value),
+        oldK: x.dataset.combo, newK: x.selectedOptions[0].dataset.combo,
+      }));
+      const singles = chosen.filter(x => x.oldK === x.newK);
+      const cross = chosen.filter(x => x.oldK !== x.newK);
+      let err = null;
+      if (cross.length > 0) {
+        const a = cross.map(x => x.oldK).sort().join(","), b = cross.map(x => x.newK).sort().join(",");
+        if (a !== b) {
+          err = `種類を入れ替える移動は、組み合わせが元と同じになるようにしてください（今：${cross.map(x => KLs[x.oldK]).join("・")} → 移動後：${cross.map(x => KLs[x.newK]).join("・")}）。このままだと3:3のルールが崩れます。`;
+        }
+      }
+      return { chosen, singles, cross, err };
+    };
+    const refresh = () => {
+      const { chosen, singles, cross, err } = analyze();
+      const box = document.getElementById("move-check");
+      if (err) { box.className = "notice warn"; box.textContent = err; saveBtn.disabled = true; return; }
+      saveBtn.disabled = false;
+      if (chosen.length === 0) { box.className = "notice info"; box.textContent = "移動したいクールの移動先を選んでください（何も選ばずに保存すると、申請を取り下げます）。"; return; }
+      const parts = [];
+      if (singles.length) parts.push(`同じ種類の移動 ${singles.length}件（1つずつ抽選）`);
+      if (cross.length) parts.push(`種類を入れ替えるセット申請 ${cross.map(x => window.COURSE_LABELS[x.course - 1]).join("・")}（全部当たった場合だけ移動）`);
+      box.className = "notice success";
+      box.textContent = "申請できます：" + parts.join("／");
+    };
+    document.querySelectorAll(".move-target").forEach(x => x.onchange = refresh);
+    refresh();
+
     saveBtn.onclick = async () => {
+      const { singles, cross, err } = analyze();
+      if (err) { alert(err); return; }
       saveBtn.disabled = true;
       const sels = [...document.querySelectorAll(".move-target")];
       // いったんこの回の自分の申請を取り下げて、選んだ内容で出し直す
       await sb.from("move_requests").update({ status: "withdrawn" })
         .eq("run_id", openRun.id).eq("student_id", myId).eq("status", "pending")
         .or("allow_cross.is.null,allow_cross.eq.false"); // 学年代表が登録した申請は残す
-      const rows = sels.filter(x => x.value).map(x => ({
-        run_id: openRun.id, student_id: myId,
-        course_number: Number(x.dataset.course), from_slot: String(x.dataset.from), to_slot: String(x.value),
-        status: "pending",
-      }));
+      const newId = () => (crypto.randomUUID ? crypto.randomUUID() : "b" + Date.now() + Math.random().toString(16).slice(2));
+      const crossBundle = newId();
+      const rows = []
+        .concat(singles.map(x => ({ run_id: openRun.id, student_id: myId, course_number: x.course, from_slot: x.from, to_slot: x.to, status: "pending", bundle_id: newId() })))
+        .concat(cross.map(x => ({ run_id: openRun.id, student_id: myId, course_number: x.course, from_slot: x.from, to_slot: x.to, status: "pending", bundle_id: crossBundle })));
+      void sels;
       if (rows.length > 0) {
         const { error } = await sb.from("move_requests").insert(rows);
         if (error) { alert("保存に失敗しました: " + error.message); saveBtn.disabled = false; return; }

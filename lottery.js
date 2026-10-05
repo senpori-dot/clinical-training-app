@@ -283,38 +283,49 @@ window.runMoveCore = async function (sb, run) {
     return true;
   };
 
-  // 偏りのないシャッフル
-  const list = (reqs || []).slice();
+  // 申請をセット（bundle_id）ごとにまとめる。bundle_id がない古い申請は1件ずつ
+  const bundles = {};
+  (reqs || []).forEach(r => { const k = r.bundle_id || ("single_" + r.id); (bundles[k] = bundles[k] || []).push(r); });
+  const list = Object.values(bundles);
   for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
 
   const freed = [];
-  for (const r of list) {
-    const c = Number(r.course_number);
-    const cur = (assigns || []).find(a => String(a.student_id) === String(r.student_id) && a.course_number === c);
-    const from = slotMap[String(r.from_slot)], to = slotMap[String(r.to_slot)];
-    // 申請後に枠が変わっていたり、種類が違う場合は無効
-    // allow_cross＝学年代表が個別に認めた「種類の違う枠への移動」の申請（種類のチェックを省く）
-    if (!cur || String(cur.slot_id) !== String(r.from_slot) || !from || !to || (!r.allow_cross && moveComboKey(from) !== moveComboKey(to))) {
-      await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id);
-      continue;
+  const setStatus = async (rs, st) => { for (const r of rs) await sb.from("move_requests").update({ status: st }).eq("id", r.id); };
+  for (const rs of list) {
+    // チェック：今の枠が申請時のままか、種類の組み合わせが元と同じか、移動先すべてに空きがあるか
+    let ok = true;
+    const curs = [];
+    for (const r of rs) {
+      const c = Number(r.course_number);
+      const cur = (assigns || []).find(a => String(a.student_id) === String(r.student_id) && a.course_number === c);
+      const from = slotMap[String(r.from_slot)], to = slotMap[String(r.to_slot)];
+      if (!cur || String(cur.slot_id) !== String(r.from_slot) || !from || !to) { ok = false; break; }
+      if (!hasRoom(r.to_slot, c)) { ok = false; break; }
+      curs.push({ r, cur, from, to, c });
     }
-    if (!hasRoom(r.to_slot, c)) {
-      await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id);
-      continue;
+    if (ok && !rs.some(r => r.allow_cross)) {
+      const a = curs.map(x => moveComboKey(x.from)).sort().join(","), b = curs.map(x => moveComboKey(x.to)).sort().join(",");
+      if (a !== b) ok = false;
     }
-    // 移動した枠は、表の中でトレードと同じ黒字＋🔄で表示する
-    let { error } = await sb.from("assignments").update({ slot_id: r.to_slot, lodging_choice: null, swapped: true }).eq("id", cur.id);
-    if (error) ({ error } = await sb.from("assignments").update({ slot_id: r.to_slot, lodging_choice: null }).eq("id", cur.id));
-    if (error) { await sb.from("move_requests").update({ status: "lost" }).eq("id", r.id); continue; }
-    await sb.from("move_requests").update({ status: "won" }).eq("id", r.id);
-    // 使用数を更新（移動先+1、移動元-1）
-    const kTo = String(r.to_slot) + "_" + c, kFrom = String(r.from_slot) + "_" + c;
-    used[kTo] = (used[kTo] || 0) + 1;
-    used[kFrom] = Math.max(0, (used[kFrom] || 0) - 1);
-    facUsed[to.facility_name + "_" + c] = (facUsed[to.facility_name + "_" + c] || 0) + 1;
-    facUsed[from.facility_name + "_" + c] = Math.max(0, (facUsed[from.facility_name + "_" + c] || 0) - 1);
-    cur.slot_id = r.to_slot;
-    freed.push({ slot_id: String(r.from_slot), course: c });
+    if (!ok) { await setStatus(rs, "lost"); continue; }
+    // 全部まとめて移動（移動した枠は黒字＋🔄で表示）
+    let failed = false;
+    for (const x of curs) {
+      let { error } = await sb.from("assignments").update({ slot_id: x.r.to_slot, lodging_choice: null, swapped: true }).eq("id", x.cur.id);
+      if (error) ({ error } = await sb.from("assignments").update({ slot_id: x.r.to_slot, lodging_choice: null }).eq("id", x.cur.id));
+      if (error) { failed = true; break; }
+    }
+    if (failed) { await setStatus(rs, "lost"); continue; }
+    await setStatus(rs, "won");
+    for (const x of curs) {
+      const kTo = String(x.r.to_slot) + "_" + x.c, kFrom = String(x.r.from_slot) + "_" + x.c;
+      used[kTo] = (used[kTo] || 0) + 1;
+      used[kFrom] = Math.max(0, (used[kFrom] || 0) - 1);
+      facUsed[x.to.facility_name + "_" + x.c] = (facUsed[x.to.facility_name + "_" + x.c] || 0) + 1;
+      facUsed[x.from.facility_name + "_" + x.c] = Math.max(0, (facUsed[x.from.facility_name + "_" + x.c] || 0) - 1);
+      x.cur.slot_id = x.r.to_slot;
+      freed.push({ slot_id: String(x.r.from_slot), course: x.c });
+    }
   }
 
   // 空いた枠（処理後にまだ空きがあるもの）を記録してアナウンスに使う
