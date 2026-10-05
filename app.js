@@ -451,6 +451,31 @@ function popupDue(key) {
   return true;
 }
 
+// 宿泊の回答がまだの人へのポップアップ（3時間ごと）
+function maybeShowLodgingPopup(student, unanswered, lodgingSettings) {
+  if (!popupDue(`lodging_popup_${student.id}`)) return;
+  const list = unanswered
+    .slice().sort((a, b) => a.course_number - b.course_number)
+    .map(a => `・${window.COURSE_LABELS[a.course_number - 1]} ${a.slots.facility_name} ${a.slots.department_name}`)
+    .join("\n");
+  const dl = lodgingSettings && lodgingSettings.deadline ? fmtDate(lodgingSettings.deadline) : "10/6";
+  showOrQueuePopup(() => {
+    const root = document.getElementById("facility-modal-root");
+    const body = `次の実習先について、宿泊するかどうかの回答がまだです。\n\n${list}\n\n画面上部の「宿泊するかどうかの回答」から、「宿泊する」か「宿泊しない」を選んでください。\n回答期限：${dl}\n\n期限までに回答がない場合は、宿泊なしとして扱われ、原則として後から変更できません。`;
+    root.innerHTML = `
+      <div class="modal-backdrop reveal-backdrop" id="lodging-backdrop">
+        <div class="reveal-box" style="background:#fdf1ec;">
+          <div class="reveal-emoji">🏨</div>
+          <div class="reveal-title" style="color:#b3413a;">宿泊の回答をお願いします</div>
+          <div class="reveal-detail" style="text-align:left;">${esc(body)}</div>
+          <button class="secondary" id="lodging-close-btn">わかりました</button>
+        </div>
+      </div>
+    `;
+    document.getElementById("lodging-close-btn").onclick = closeFacilityModal;
+  });
+}
+
 // 全ラウンド終了のお知らせポップアップ（3時間ごと）
 function maybeShowAllEndedPopup(student) {
   if (!popupDue(`all_ended_popup_${student.id}`)) return;
@@ -1177,6 +1202,11 @@ async function renderApp(student, round, assignments, lodgingSettings) {
   appEl.innerHTML = html;
   attachLodgingHandlers();
   attachCancelHandler(student);
+  // 宿泊の回答がまだの人にはポップアップで知らせる（3時間ごと）
+  {
+    const unanswered = lodgingNeeded.filter(a => !a.lodging_choice);
+    if (unanswered.length > 0) maybeShowLodgingPopup(student, unanswered, lodgingSettings);
+  }
   if (window.__allRoundsEnded) maybeShowAllEndedPopup(student);
   try { await renderMoveSection(student); } catch (e) { console.error("空き枠トレード欄の表示に失敗しました", e); }
   try { await renderSwapSection(student, assignments); } catch (e) { console.error("トレード欄の表示に失敗しました", e); }
