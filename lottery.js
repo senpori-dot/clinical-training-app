@@ -296,36 +296,63 @@ window.runMoveCore = async function (sb, run) {
     let ok = true;
     const curs = [];
     for (const r of rs) {
-      const c = Number(r.course_number);
+      const c = Number(r.course_number);              // 今の枠のクール
+      const tcr = Number(r.to_course || r.course_number); // 移動先のクール
       const cur = (assigns || []).find(a => String(a.student_id) === String(r.student_id) && a.course_number === c);
       const from = slotMap[String(r.from_slot)], to = slotMap[String(r.to_slot)];
       if (!cur || String(cur.slot_id) !== String(r.from_slot) || !from || !to) { ok = false; break; }
-      if (!hasRoom(r.to_slot, c)) { ok = false; break; }
-      curs.push({ r, cur, from, to, c });
+      if (!hasRoom(r.to_slot, tcr)) { ok = false; break; }
+      curs.push({ r, cur, from, to, c, tc: tcr });
     }
     if (ok && !rs.some(r => r.allow_cross)) {
       const a = curs.map(x => moveComboKey(x.from)).sort().join(","), b = curs.map(x => moveComboKey(x.to)).sort().join(",");
       if (a !== b) ok = false;
+      // クールを入れ替える場合、移動元と移動先のクールの組み合わせが同じでないといけない
+      const fa = curs.map(x => x.c).sort().join(","), fb = curs.map(x => x.tc).sort().join(",");
+      if (fa !== fb) ok = false;
     }
     if (!ok) { await setStatus(rs, "lost"); continue; }
+
     // 全部まとめて移動（移動した枠は黒字＋🔄で表示）
     let failed = false;
-    for (const x of curs) {
-      let { error } = await sb.from("assignments").update({ slot_id: x.r.to_slot, lodging_choice: null, swapped: true }).eq("id", x.cur.id);
-      if (error) ({ error } = await sb.from("assignments").update({ slot_id: x.r.to_slot, lodging_choice: null }).eq("id", x.cur.id));
-      if (error) { failed = true; break; }
+    const courseChange = curs.some(x => x.tc !== x.c);
+    if (!courseChange) {
+      for (const x of curs) {
+        let { error } = await sb.from("assignments").update({ slot_id: x.r.to_slot, lodging_choice: null, swapped: true }).eq("id", x.cur.id);
+        if (error) ({ error } = await sb.from("assignments").update({ slot_id: x.r.to_slot, lodging_choice: null }).eq("id", x.cur.id));
+        if (error) { failed = true; break; }
+      }
+    } else {
+      // クールが入れ替わるので、いったん該当クールの確定を消して入れ直す（失敗したら元に戻す）
+      const sid = curs[0].cur.student_id;
+      const originals = curs.map(x => ({ student_id: sid, course_number: x.c, slot_id: x.cur.slot_id }));
+      const del = await sb.from("assignments").delete().in("id", curs.map(x => x.cur.id));
+      if (del.error) { failed = true; }
+      else {
+        let ins = await sb.from("assignments").insert(curs.map(x => ({ student_id: sid, course_number: x.tc, slot_id: x.r.to_slot, swapped: true })));
+        if (ins.error) ins = await sb.from("assignments").insert(curs.map(x => ({ student_id: sid, course_number: x.tc, slot_id: x.r.to_slot })));
+        if (ins.error) {
+          await sb.from("assignments").insert(originals);
+          failed = true;
+        }
+      }
     }
     if (failed) { await setStatus(rs, "lost"); continue; }
     await setStatus(rs, "won");
     for (const x of curs) {
-      const kTo = String(x.r.to_slot) + "_" + x.c, kFrom = String(x.r.from_slot) + "_" + x.c;
+      const kTo = String(x.r.to_slot) + "_" + x.tc, kFrom = String(x.r.from_slot) + "_" + x.c;
       used[kTo] = (used[kTo] || 0) + 1;
       used[kFrom] = Math.max(0, (used[kFrom] || 0) - 1);
-      facUsed[x.to.facility_name + "_" + x.c] = (facUsed[x.to.facility_name + "_" + x.c] || 0) + 1;
+      facUsed[x.to.facility_name + "_" + x.tc] = (facUsed[x.to.facility_name + "_" + x.tc] || 0) + 1;
       facUsed[x.from.facility_name + "_" + x.c] = Math.max(0, (facUsed[x.from.facility_name + "_" + x.c] || 0) - 1);
-      x.cur.slot_id = x.r.to_slot;
       freed.push({ slot_id: String(x.r.from_slot), course: x.c });
     }
+    // 手元の確定一覧も更新（同じ回のほかの申請の判定用）
+    for (const x of curs) {
+      const i = assigns.indexOf(x.cur);
+      if (i >= 0) assigns.splice(i, 1);
+    }
+    for (const x of curs) assigns.push({ id: null, student_id: curs[0].cur.student_id, course_number: x.tc, slot_id: x.r.to_slot });
   }
 
   // 空いた枠（処理後にまだ空きがあるもの）を記録してアナウンスに使う
